@@ -1,0 +1,17 @@
+**Valhalla Companion 0.5.0 — bilingual interface, quantities and equipment protection**
+
+**English** | [Español](VALIDACION.md)
+
+The interface offers English and Spanish through the Language / Idioma selector and remembers the local preference. Application controls, categories, item types, helpers and application-authored messages are presented in the chosen language. Item and pack names retain the source reference and their identifiers stay unchanged. Interface translation is not presented as an official localization of every internal game name.
+
+This release shows quantities from the latest inventory reading in lists, cards, requests and the detail panel. Show quantities controls their display and automatic reading on attachment. The reading time and session identity are retained. An absent record is not displayed as zero. Failed readings, disconnecting and blocked sessions invalidate previous values. Edits are read again. The inventory is not polled continuously.
+
+Identified equipment uses a one-unit rule to prevent duplicates. Each piece is limited individually, including in mixed packs, and the inventory is checked again before requesting it. Equipment already present is skipped. Existing duplicate quantities are neither corrected nor hidden. Classification uses catalogue names and categories, independently of the illustrations; ambiguous names are not automatically treated as equipment.
+
+Arbitrary limits have been removed from quantity controls and the request list. Values such as 9,999 and 100,000 are accepted, while preserving the conservative editing range of 0 to 2,147,483,647 for the four-byte field. This is not presented as the item's native capacity. The CT allows equipment copies and supplies neither a general maximum of 99 nor a verified field for discovering every item's maximum. Specific limits may only be applied as such when verified. Application requests require a valid inventory reading and check that the total stays within the permitted range or limit. Address, session and generation checks before editing, and the special handling of rations, are preserved.
+
+The EXE embeds the original icon at sizes 16, 32, 48, 64, 128 and 256. The window is assigned that icon explicitly, and Windows receives a stable application identity before the window is created. The build adds product and version metadata and verifies the executable's icon resources against the original ICO. It does not change the user's icons, shortcuts or global Windows icon cache.
+
+Automated tests use inert sessions, simulated data and dedicated helper processes. Language verification covers selection, local preferences, formatting and preserving identifiers during translation. Existing checks cover large quantities, simulated verified limits, totals that would overflow the range, equipment already present, effective quantities in mixed packs, failed readings or readings from another instance, unknown fields and measured zero. The build also runs the actual executable's self-test, verifies the icon and captures its interface in both languages. Validation with a real save and the specific Valhalla build remains pending.
+
+The binary's size, SHA-256 and verification results are recorded in `dist/release.json`. This release's executable is named `ValhallaCompanion-0.5.0.exe`. Generated packages are distributed as downloadable releases and are not included in the source history.

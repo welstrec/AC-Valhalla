@@ -17,6 +17,8 @@ from PySide6.QtCore import QByteArray, Qt, QRectF
 from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 
+from .i18n import Translator
+
 
 @dataclass(frozen=True)
 class IconDescription:
@@ -279,10 +281,11 @@ def svg_art(kind, theme="neutral", variant=0):
 
 class IconProvider:
     """GUI-thread artwork cache bounded to avoid 2,327 full-sized bitmaps."""
-    def __init__(self, catalog=None, cache_limit=256):
+    def __init__(self, catalog=None, cache_limit=256, translator=None):
         if type(cache_limit) is not int or cache_limit < 1:
             raise ValueError("El límite de la caché debe ser positivo")
         self.catalog = catalog
+        self.translator = translator if translator is not None else Translator("es")
         self.cache_limit = cache_limit
         self._cache = OrderedDict()
         self._aliases = getattr(catalog, "_search_text", {}) if catalog is not None else {}
@@ -314,7 +317,8 @@ class IconProvider:
                 candidates.discard("weapon")
             if len(candidates) == 1:
                 kind = next(iter(candidates))
-        return IconDescription(kind, LABELS[kind], theme=_theme(context))
+        return IconDescription(kind, self.translator.text(LABELS[kind]),
+                               self.translator.text("Ilustración semántica"), theme=_theme(context))
 
     @staticmethod
     def _size(size):
@@ -353,7 +357,13 @@ class IconProvider:
         return QIcon(self.pixmap(item, size))
 
     def describe_pack(self, pack):
-        return IconDescription("chest", f"Pack de {len(pack.hashes)} objetos", "Composición de ilustraciones semánticas")
+        title = "Pack de {count} objeto" if len(pack.hashes) == 1 else "Pack de {count} objetos"
+        return IconDescription("chest", self.translator.text(title, count=len(pack.hashes)),
+                               self.translator.text("Composición de ilustraciones semánticas"))
+
+    def retranslate(self):
+        """Labels are evaluated live; language changes preserve the artwork cache."""
+        return None
 
     def pack_pixmap(self, pack, catalog=None, size=128):
         self._size(size)

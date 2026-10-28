@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QApplication
 
 from valhalla.catalog import Catalog, Item, Pack
 from valhalla.icons import IconProvider, LABELS, SHAPES, _PALETTES, classify, svg_art
+from valhalla.i18n import Translator
 
 
 class SemanticIconTests(unittest.TestCase):
@@ -55,6 +56,25 @@ class SemanticIconTests(unittest.TestCase):
         generic = provider.describe(self.item("Mystery", ("WEAPONS",)))
         self.assertEqual((generic.kind, generic.label), ("weapon", "Arma"))
         self.assertEqual(classify(self.item("Raven Clan", ("ARMOR",))), "torso")
+
+    def test_description_language_changes_without_changing_semantics_or_artwork(self):
+        translator = Translator("en")
+        provider = IconProvider(translator=translator)
+        item = self.item("Frost Axe")
+        english = provider.describe(item)
+        picture = provider.pixmap(item)
+        self.assertEqual(english.label, "Axe")
+        self.assertEqual(english.source, "Semantic illustration")
+        pack = self.pack("Example pack")
+        self.assertEqual(provider.describe_pack(pack).label, "Pack of 1 item")
+        translator.set_language("es")
+        provider.retranslate()
+        spanish = provider.describe(item)
+        self.assertEqual(spanish.label, "Hacha")
+        self.assertEqual(spanish.source, "Ilustración semántica")
+        self.assertEqual((spanish.kind, spanish.theme, spanish.exact),
+                         (english.kind, english.theme, english.exact))
+        self.assertEqual(provider.pixmap(item).cacheKey(), picture.cacheKey())
 
     def test_catalogue_aliases_can_restore_missing_names(self):
         item, provider = self.provider_for("0000000000000001", aliases={"0000000000000001": "frost spear"})

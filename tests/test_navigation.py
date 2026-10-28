@@ -12,6 +12,7 @@ from PySide6.QtWidgets import QApplication, QWidget
 from valhalla.catalog import Catalog
 from valhalla.icons import IconProvider
 from valhalla.navigation import CatalogNavigator, CatalogScope, SCOPE_ROLE
+from valhalla.i18n import Translator
 
 
 class TrackingProvider(IconProvider):
@@ -171,6 +172,31 @@ class NavigationTests(unittest.TestCase):
         self.assertTrue(node.data(0, Qt.ItemDataRole.AccessibleTextRole))
         self.assertTrue(node.data(0, Qt.ItemDataRole.AccessibleDescriptionRole))
         self.assertIn("Categorías", self.navigator.tree.accessibleName())
+
+    def test_language_switch_preserves_exact_scope_selection_and_expansion(self):
+        self.navigator.close()
+        translator = Translator("en")
+        provider = IconProvider(self.catalog, translator=translator)
+        self.navigator = CatalogNavigator(self.catalog, provider, translator=translator)
+        pack = self.catalog.packs[0]
+        self.navigator.select_key(f"pack:{pack.id}")
+        scope = self.navigator.current_scope()
+        expanded = {key: node.isExpanded() for key, node in self.navigator._nodes.items()}
+        selected = self.navigator.tree.currentItem()
+        self.assertEqual(self.navigator._nodes["all"].text(0), "All items and packs (2327)")
+        self.assertEqual(self.navigator.tree.accessibleName(), "Catalogue categories")
+        self.assertIn("Default quantity per item", selected.toolTip(0))
+        self.assertIn(pack.name, self.navigator.breadcrumb())
+        self.assertEqual(scope.title, pack.name)
+        changes = QSignalSpy(self.navigator.scope_changed)
+        translator.set_language("es")
+        self.navigator.retranslate()
+        self.assertEqual(self.navigator._nodes["all"].text(0), "Todo el catálogo (2327)")
+        self.assertIs(self.navigator.tree.currentItem(), selected)
+        self.assertIs(self.navigator.current_scope(), scope)
+        self.assertEqual({key: node.isExpanded() for key, node in self.navigator._nodes.items()}, expanded)
+        self.assertEqual(changes.count(), 0)
+        self.assertEqual(scope.hashes, frozenset(pack.hashes))
 
 
 if __name__ == "__main__":

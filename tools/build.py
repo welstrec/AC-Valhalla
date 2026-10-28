@@ -14,7 +14,8 @@ from importlib import metadata as packages
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from valhalla import __version__ as VERSION
-VALIDATION = ROOT / "docs" / "VALIDACION.md"
+VALIDATIONS = (ROOT / "docs" / "VALIDATION.md", ROOT / "docs" / "VALIDACION.md")
+READMES = ("README.md", "README.es.md")
 
 
 def verify_executable_icon(executable, source_icon):
@@ -98,35 +99,47 @@ def main():
     version_file = ROOT / "artifacts/windows-version.txt"
     version_file.parent.mkdir(parents=True, exist_ok=True)
     version_file.write_text(version_resource(VERSION), encoding="utf-8")
+    from PySide6.QtCore import QLibraryInfo
+    qt_spanish = Path(QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)) / "qtbase_es.qm"
+    extra_data = ["--add-data", "valhalla/translations;valhalla/translations"]
+    if qt_spanish.is_file():
+        extra_data.extend(["--add-data", f"{qt_spanish};assets"])
     subprocess.run([sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--onefile", "--windowed",
                     "--name", f"ValhallaCompanion-{VERSION}", "--icon", "assets/valhalla.ico",
                     "--version-file", str(version_file),
                     "--add-data", "data/catalog.json;data", "--add-data", "assets/valhalla.ico;assets",
                     "--collect-binaries", "keystone", "--collect-data", "keystone", "--collect-data", "qtawesome",
-                    "--hidden-import", "capstone", "run.py"], check=True)
+                    "--hidden-import", "capstone", *extra_data, "run.py"], check=True)
     executable = ROOT / f"dist/ValhallaCompanion-{VERSION}.exe"
     embedded_icon_sizes = verify_executable_icon(executable, ROOT / "assets/valhalla.ico")
     subprocess.run([str(executable), "--self-test-output", str(ROOT / "artifacts/frozen-self-test.json")], check=True, timeout=90)
     result = json.loads((ROOT / "artifacts/frozen-self-test.json").read_text(encoding="utf-8"))
     if not result.get("ok"):
         raise RuntimeError(f"El ejecutable no pasó su comprobación: {result}")
-    subprocess.run([str(executable), "--screenshot", str(ROOT / "artifacts/ui-exe.png")], check=True, timeout=90)
+    subprocess.run([str(executable), "--screenshot", str(ROOT / "artifacts/ui-exe.png"), "--language", "en"], check=True, timeout=90)
     subprocess.run([str(executable), "--screenshot", str(ROOT / "artifacts/ui-exe-explorer.png"),
-                    "--preview-page", "catalog", "--preview-node", "pack:99201"], check=True, timeout=90)
+                    "--preview-page", "catalog", "--preview-node", "pack:99201", "--language", "en"], check=True, timeout=90)
+    subprocess.run([str(executable), "--screenshot", str(ROOT / "artifacts/ui-exe-explorer-es.png"),
+                    "--preview-page", "catalog", "--preview-node", "pack:99201", "--language", "es"], check=True, timeout=90)
     subprocess.run([str(executable), "--screenshot", str(ROOT / "artifacts/ui-exe-gallery.png"),
-                    "--preview-page", "catalog", "--preview-query", "Berserker", "--preview-view", "cards"], check=True, timeout=90)
-    metadata = {"application": "Valhalla Companion", "version": VERSION, "date": "2026-10-27",
+                    "--preview-page", "catalog", "--preview-query", "Berserker", "--preview-view", "cards", "--language", "en"], check=True, timeout=90)
+    metadata = {"application": "Valhalla Companion", "version": VERSION, "date": "2026-10-28",
                 "file": executable.name, "size": executable.stat().st_size,
                 "sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
                 "frozen_self_test": result, "gameplay_validated": False,
                 "embedded_icon_sizes_checked": embedded_icon_sizes,
+                "languages": list(result["languages_available"]), "qt_spanish_catalogue_included": qt_spanish.is_file(),
                 "digital_signature": "unsigned"}
     (ROOT / "dist/release.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
-    portable_readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    portable_readme = portable_readme.replace("(docs/VALIDACION.md)", "(VALIDACION.md)").replace("(third_party/)", "(licenses/)")
-    (ROOT / "dist/README.md").write_text(portable_readme, encoding="utf-8")
+    for name in READMES:
+        portable_readme = (ROOT / name).read_text(encoding="utf-8")
+        for validation in VALIDATIONS:
+            portable_readme = portable_readme.replace(f"(docs/{validation.name})", f"({validation.name})")
+        portable_readme = portable_readme.replace("(third_party/)", "(licenses/)")
+        (ROOT / "dist" / name).write_text(portable_readme, encoding="utf-8")
     shutil.copy2(ROOT / "THIRD_PARTY.md", ROOT / "dist/THIRD_PARTY.md")
-    shutil.copy2(VALIDATION, ROOT / "dist" / VALIDATION.name)
+    for validation in VALIDATIONS:
+        shutil.copy2(validation, ROOT / "dist" / validation.name)
     licenses = ROOT / "dist/licenses"
     licenses.mkdir(exist_ok=True)
     for package in ("PySide6-Essentials", "shiboken6", "keystone-engine", "capstone", "pyinstaller", "Pillow", "QtAwesome", "QtPy"):
@@ -147,7 +160,9 @@ def main():
         shutil.copy2(source, destination)
     portable = ROOT / f"dist/ValhallaCompanion-{VERSION}-Windows-x64.zip"
     with zipfile.ZipFile(portable, "w", zipfile.ZIP_DEFLATED) as archive:
-        for path in [executable, ROOT / "dist/release.json", ROOT / "dist/README.md", ROOT / "dist/THIRD_PARTY.md", ROOT / "dist" / VALIDATION.name, *licenses.rglob("*")]:
+        for path in [executable, ROOT / "dist/release.json", ROOT / "dist/THIRD_PARTY.md",
+                     *(ROOT / "dist" / name for name in READMES),
+                     *(ROOT / "dist" / validation.name for validation in VALIDATIONS), *licenses.rglob("*")]:
             if path.is_file():
                 archive.write(path, path.relative_to(ROOT / "dist"))
     sources = ROOT / f"dist/ValhallaCompanion-source-{VERSION}.zip"
@@ -156,7 +171,7 @@ def main():
             for path in (ROOT / folder).rglob("*"):
                 if path.is_file() and "__pycache__" not in path.parts:
                     archive.write(path, path.relative_to(ROOT))
-        for filename in ("run.py", "requirements.txt", "build.ps1", "README.md", "THIRD_PARTY.md", ".gitignore", ".gitattributes"):
+        for filename in ("run.py", "requirements.txt", "build.ps1", *READMES, "THIRD_PARTY.md", ".gitignore", ".gitattributes"):
             archive.write(ROOT / filename, filename)
     print(json.dumps(metadata, indent=2))
 

@@ -7,8 +7,8 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Qt, QTimer, Signal, QSize
-from PySide6.QtGui import QAction, QKeySequence, QPixmap
+from PySide6.QtCore import QObject, Qt, QTimer, Signal, QSize, QLocale
+from PySide6.QtGui import QAction, QActionGroup, QKeySequence, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog,
     QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QScrollArea, QSpinBox, QStackedWidget, QTabWidget, QTableWidget,
     QTableWidgetItem, QVBoxLayout, QWidget,
 )
+from shiboken6 import isValid
 
 from . import __version__
 from .catalog import Catalog
@@ -33,6 +34,8 @@ from .list_view import RowArtworkDelegate
 from .theme import apply_theme
 from .quantities import QuantityPolicy, MAX_STACK_QUANTITY
 from .branding import install_window_icon
+from .i18n import Translator, save_language
+from .qt_language import install_qt_language
 
 LOG = logging.getLogger(__name__)
 
@@ -105,12 +108,21 @@ def table(columns, accessible):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, catalog=None, library=None):
+    _TEXT_ROLE = int(Qt.ItemDataRole.UserRole) + 900
+    _COMBO_SOURCE_ROLE = int(Qt.ItemDataRole.UserRole) + 901
+    _TEXT_METHODS = ("setText", "setToolTip", "setPlaceholderText", "setAccessibleName", "setAccessibleDescription", "setWindowTitle", "setPlainText", "setFormat", "setTitle", "showMessage")
+
+    def __init__(self, catalog=None, library=None, language="es", settings_path=None):
         super().__init__()
+        self.translator = Translator(language)
+        self.language_settings_path = settings_path
+        self._activity_messages = []
+        install_qt_language(QApplication.instance(), self.translator.language)
+        self.setLocale(QLocale("es_CO" if self.translator.language == "es" else "en_US"))
         install_window_icon(self)
         self.catalog = catalog or Catalog.load()
         self.library = library if library is not None else UserLibrary()
-        self.icon_provider = IconProvider(self.catalog)
+        self.icon_provider = IconProvider(self.catalog, translator=self.translator)
         self.quantity_policy = QuantityPolicy(self.catalog)
         self.request_queue = RequestQueue(quantity_policy=self.quantity_policy)
         self.detail_item = None
@@ -137,8 +149,8 @@ class MainWindow(QMainWindow):
         self.worker.progress.connect(self._progress)
         self._callback = None
         self._size = 1.0
-        self.setWindowTitle(f"Valhalla Companion · {__version__}")
-        self.setAccessibleName("Valhalla Companion, editor de inventario de Assassin's Creed Valhalla")
+        self._set_text(self, 'setWindowTitle', f"Valhalla Companion · {__version__}")
+        self._set_text(self, 'setAccessibleName', "Valhalla Companion, editor de inventario de Assassin's Creed Valhalla")
         self.resize(1280, 860)
         self.setMinimumSize(960, 680)
         self._build()
@@ -154,6 +166,149 @@ class MainWindow(QMainWindow):
         self.timer.timeout.connect(self._poll)
         self.timer.start(3000)
 
+    def t(self, source):
+        return self.translator.message(str(source))
+
+    def _set_text(self, target, method, source):
+        source = str(source)
+        if isinstance(target, QObject):
+            target.setProperty("_vc_i18n_" + method, source)
+        elif isinstance(target, QTableWidgetItem):
+            sources = target.data(self._TEXT_ROLE) or {}
+            target.setData(self._TEXT_ROLE, {**sources, method: source})
+        getattr(target, method)(self.t(source))
+
+    def _label(self, source, name=None, wrap=False):
+        widget = label(self.t(source), name, wrap)
+        widget.setProperty("_vc_i18n_setText", str(source))
+        return widget
+
+    def _button(self, source, callback, primary=False, accessible=None):
+        widget = button(self.t(source), callback, primary, self.t((accessible or source).replace("&", "")))
+        widget.setProperty("_vc_i18n_setText", str(source))
+        widget.setProperty("_vc_i18n_setAccessibleName", str(accessible or source).replace("&", ""))
+        return widget
+
+    def _checkbox(self, source, *args):
+        widget = QCheckBox(self.t(source), *args)
+        widget.setProperty("_vc_i18n_setText", str(source))
+        return widget
+
+    def _action(self, source, *args):
+        action = QAction(self.t(source), *args)
+        action.setProperty("_vc_i18n_setText", str(source))
+        return action
+
+    def _cell(self, source):
+        cell = QTableWidgetItem(self.t(source))
+        cell.setData(self._TEXT_ROLE, {"setText": str(source)})
+        return cell
+
+    def _table(self, columns, accessible):
+        widget = table([self.t(value) for value in columns], self.t(accessible))
+        widget.setProperty("_vc_i18n_setAccessibleName", accessible)
+        for index, source in enumerate(columns):
+            widget.horizontalHeaderItem(index).setData(self._TEXT_ROLE, {"setText": source})
+        return widget
+
+    def _add_item(self, combo, source, data=None):
+        displayed = self.translator.category(source) if combo is getattr(self, "category", None) else self.t(source)
+        combo.addItem(displayed, data)
+        combo.setItemData(combo.count() - 1, str(source), self._COMBO_SOURCE_ROLE)
+
+    def _add_items(self, combo, sources):
+        for source in sources:
+            self._add_item(combo, source, source)
+
+    def _add_tab(self, tabs, widget, source):
+        index = tabs.addTab(widget, self.t(source))
+        tabs.tabBar().setTabData(index, str(source))
+        return index
+
+    def _set_tab_text(self, tabs, index, source):
+        tabs.setTabText(index, self.t(source))
+        tabs.tabBar().setTabData(index, str(source))
+
+    def _add_menu(self, menu_bar, source):
+        menu = menu_bar.addMenu(self.t(source))
+        menu.setProperty("_vc_i18n_setTitle", source)
+        return menu
+
+    def set_language(self, language, persist=True):
+        """Change presentation without reading or changing the game process."""
+        selected_hash = self.detail_item.hash_id if self.detail_item else None
+        selected_pack = self.detail_pack.id if self.detail_pack else None
+        inventory_row = self.inventory_table.currentRow()
+        amount, edited_amount = self.grant_quantity.value(), self.new_quantity.value()
+        self.translator.set_language(language)
+        install_qt_language(QApplication.instance(), self.translator.language)
+        locale = QLocale("es_CO" if self.translator.language == "es" else "en_US")
+        for obj in [self, *self.findChildren(QObject)]:
+            if not isValid(obj):
+                continue
+            for method in self._TEXT_METHODS:
+                source = obj.property("_vc_i18n_" + method)
+                if source is not None and hasattr(obj, method):
+                    getattr(obj, method)(self.t(source))
+            if isinstance(obj, QWidget):
+                obj.setLocale(locale)
+            if isinstance(obj, QComboBox):
+                was_blocked = obj.blockSignals(True)
+                for index in range(obj.count()):
+                    source = obj.itemData(index, self._COMBO_SOURCE_ROLE)
+                    if source is not None:
+                        obj.setItemText(index, self.t(source))
+                obj.blockSignals(was_blocked)
+            if isinstance(obj, QTabWidget):
+                for index in range(obj.count()):
+                    source = obj.tabBar().tabData(index)
+                    if source is not None:
+                        obj.setTabText(index, self.t(source))
+            if isinstance(obj, QTableWidget):
+                cells = [obj.horizontalHeaderItem(i) for i in range(obj.columnCount())]
+                cells.extend(obj.item(row, col) for row in range(obj.rowCount()) for col in range(obj.columnCount()))
+                for cell in filter(None, cells):
+                    for method, source in (cell.data(self._TEXT_ROLE) or {}).items():
+                        getattr(cell, method)(self.t(source))
+        for index in range(self.category.count()):
+            self.category.setItemText(index, self.translator.category(self.category.itemData(index)))
+        kinds = {self.icon_provider.describe(item).kind: self.icon_provider.describe(item).label for item in self.catalog.items}
+        for index in range(1, self.kind_filter.count()):
+            self.kind_filter.setItemText(index, kinds[self.kind_filter.itemData(index)])
+        self.icon_provider.retranslate()
+        self.navigator.retranslate()
+        self.gallery.retranslate()
+        self.search_timer.stop()
+        self._filter_catalog()
+        self._fill_queue()
+        self._fill_features()
+        if self.resource_statuses:
+            self._resources_loaded(self.resource_statuses)
+        self._update_catalog_quantities()
+        if selected_hash and selected_hash in self._display_by_hash:
+            self.gallery.select_hash(selected_hash)
+        elif selected_pack and selected_pack in self.catalog.by_pack:
+            if self.catalog_tabs.currentIndex() == 1:
+                row = next((i for i, pack in enumerate(self.display_packs) if pack.id == selected_pack), None)
+                if row is not None:
+                    self.pack_table.selectRow(row)
+            else:
+                self._show_detail(pack=self.catalog.by_pack[selected_pack])
+        self.grant_quantity.setValue(min(amount, self.grant_quantity.maximum()))
+        if 0 <= inventory_row < len(self.inventory):
+            self.inventory_table.selectRow(inventory_row)
+            self.new_quantity.setValue(min(edited_amount, self.new_quantity.maximum()))
+        self._refresh_scope_text()
+        self.activity.setPlainText("\n".join(stamp + "  " + self.t(source) for stamp, source in self._activity_messages))
+        for code, action in self.language_actions.items():
+            action.setChecked(code == self.translator.language)
+        if persist:
+            try:
+                save_language(self.translator.language, self.language_settings_path)
+            except (OSError, ValueError) as exc:
+                self._activity("No se pudo guardar el idioma: " + str(exc))
+        self._refresh_controls()
+
     def _build(self):
         body = QWidget()
         body.setObjectName("body")
@@ -166,13 +321,13 @@ class MainWindow(QMainWindow):
         sidebar.setFixedWidth(224)
         nav = QVBoxLayout(sidebar)
         nav.setContentsMargins(20, 30, 20, 20)
-        nav.addWidget(label("VALHALLA", "brand"))
-        nav.addWidget(label("C O M P A N I O N", "eyebrow"))
+        nav.addWidget(self._label("VALHALLA", "brand"))
+        nav.addWidget(self._label("C O M P A N I O N", "eyebrow"))
         nav.addSpacing(30)
         self.nav_buttons = []
         self.pages = QStackedWidget()
         for index, text in enumerate(["Inicio", "Objetos y packs", "Mi inventario", "Ayudas del juego", "Compatibilidad", "Actividad"]):
-            item = button(text, lambda checked=False, i=index: self.navigate(i))
+            item = self._button(text, lambda checked=False, i=index: self.navigate(i))
             item.setObjectName("nav")
             item.setCheckable(True)
             item.setIcon(control_icon(["home", "th-large", "box-open", "magic", "check-circle", "history"][index]))
@@ -180,37 +335,37 @@ class MainWindow(QMainWindow):
             self.nav_buttons.append(item)
         self.nav_buttons[0].setChecked(True)
         nav.addStretch()
-        self.side_status = label("SIN CONEXIÓN", "eyebrow")
+        self.side_status = self._label("SIN CONEXIÓN", "eyebrow")
         nav.addWidget(self.side_status)
-        nav.addWidget(label(f"Windows · 64 bits\nVersión {__version__} · validación inicial", "muted", True))
+        nav.addWidget(self._label(f"Windows · 64 bits\nVersión {__version__} · validación inicial", "muted", True))
         layout.addWidget(sidebar)
         main = QWidget()
         content = QVBoxLayout(main)
         content.setContentsMargins(28, 24, 28, 18)
         content.setSpacing(16)
-        self.heading = label("Tu partida, bajo control.", "title")
+        self.heading = self._label("Tu partida, bajo control.", "title")
         content.addWidget(self.heading)
-        self.subtitle = label("Conecta el juego, comprueba las funciones y elige qué cambiar.", "muted", True)
+        self.subtitle = self._label("Conecta el juego, comprueba las funciones y elige qué cambiar.", "muted", True)
         content.addWidget(self.subtitle)
         connect = QHBoxLayout()
-        process_label = label("&Proceso:")
+        process_label = self._label("&Proceso:")
         self.processes = QComboBox()
-        self.processes.setAccessibleName("Proceso de Assassin's Creed Valhalla")
+        self._set_text(self.processes, 'setAccessibleName', "Proceso de Assassin's Creed Valhalla")
         self.processes.setMinimumWidth(100)
         self.processes.setMinimumContentsLength(10)
         self.processes.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         process_label.setBuddy(self.processes)
         connect.addWidget(process_label)
         connect.addWidget(self.processes, 1)
-        self.refresh_button = button("&Buscar juego", self.refresh_processes)
-        self.attach_button = button("&Adjuntar", self.attach_game, True)
+        self.refresh_button = self._button("&Buscar juego", self.refresh_processes)
+        self.attach_button = self._button("&Adjuntar", self.attach_game, True)
         self.attach_button.setIcon(control_icon("link", True))
-        self.detach_button = button("Desconectar", self.disconnect_game)
+        self.detach_button = self._button("Desconectar", self.disconnect_game)
         connect.addWidget(self.refresh_button)
         connect.addWidget(self.attach_button)
         connect.addWidget(self.detach_button)
         content.addLayout(connect)
-        self.connection_status = label("Abre el juego y carga una partida. Después pulsa Buscar juego.", "status", True)
+        self.connection_status = self._label("Abre el juego y carga una partida. Después pulsa Buscar juego.", "status", True)
         content.addWidget(self.connection_status)
         content.addWidget(self.pages, 1)
         self.pages.addWidget(self._home())
@@ -221,16 +376,16 @@ class MainWindow(QMainWindow):
         self.pages.addWidget(self._activity_page())
         progress = QHBoxLayout()
         self.progress = QProgressBar()
-        self.progress.setAccessibleName("Progreso de la operación")
+        self._set_text(self.progress, 'setAccessibleName', "Progreso de la operación")
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
         self.progress.setTextVisible(True)
         progress.addWidget(self.progress, 1)
-        self.cancel_button = button("Cancelar operación", self.cancel_operation)
+        self.cancel_button = self._button("Cancelar operación", self.cancel_operation)
         progress.addWidget(self.cancel_button)
         content.addLayout(progress)
         layout.addWidget(main, 1)
-        self.statusBar().showMessage("Preparado · Ninguna operación activa")
+        self._set_text(self.statusBar(), 'showMessage', "Preparado · Ninguna operación activa")
 
     def _home(self):
         scroll = QScrollArea()
@@ -242,8 +397,8 @@ class MainWindow(QMainWindow):
         self.home_cards = []
         out = QVBoxLayout(page)
         out.setContentsMargins(0, 0, 0, 0)
-        out.addWidget(label("Un flujo más sencillo", "sectionTitle"))
-        out.addWidget(label("Cada función se comprueba por separado. Tú decides cuándo aplicarla.", "muted", True))
+        out.addWidget(self._label("Un flujo más sencillo", "sectionTitle"))
+        out.addWidget(self._label("Cada función se comprueba por separado. Tú decides cuándo aplicarla.", "muted", True))
         cards = QHBoxLayout()
         for number, title, text in [
             ("01", "Conecta tu partida", "Abre Valhalla y carga una partida. Selecciona el proceso y pulsa Adjuntar."),
@@ -257,21 +412,21 @@ class MainWindow(QMainWindow):
             self.home_cards.append(card)
             box = QVBoxLayout(card)
             box.setContentsMargins(20, 20, 20, 22)
-            box.addWidget(label(number, "stat"))
-            box.addWidget(label(title, "sectionTitle", True))
-            box.addWidget(label(text, "muted", True))
+            box.addWidget(self._label(number, "stat"))
+            box.addWidget(self._label(title, "sectionTitle", True))
+            box.addWidget(self._label(text, "muted", True))
             box.addStretch()
             cards.addWidget(card, 1)
         out.addLayout(cards, 1)
         stats = QHBoxLayout()
-        stats.addWidget(label(f"{len(self.catalog.items):,} objetos".replace(",", "."), "stat"))
-        stats.addWidget(label(f"{len(self.catalog.packs)} packs", "stat"))
-        stats.addWidget(label("Sin Cheat Engine", "muted"))
+        stats.addWidget(self._label(f"{len(self.catalog.items):,} objetos".replace(",", "."), "stat"))
+        stats.addWidget(self._label(f"{len(self.catalog.packs)} packs", "stat"))
+        stats.addWidget(self._label("Sin Cheat Engine", "muted"))
         out.addLayout(stats)
-        out.addWidget(label("Primera edición: las firmas detectadas indican coincidencia de código; el comportamiento en tu compilación del juego necesita validación.", "notice", True))
+        out.addWidget(self._label("Primera edición: las firmas detectadas indican coincidencia de código; el comportamiento en tu compilación del juego necesita validación.", "notice", True))
         shortcuts = QHBoxLayout()
-        shortcuts.addWidget(button("Explorar catálogo", lambda: self.navigate(1), True))
-        shortcuts.addWidget(button("Ver compatibilidad", lambda: self.navigate(4)))
+        shortcuts.addWidget(self._button("Explorar catálogo", lambda: self.navigate(1), True))
+        shortcuts.addWidget(self._button("Ver compatibilidad", lambda: self.navigate(4)))
         shortcuts.addStretch()
         out.addLayout(shortcuts)
         scroll.setWidget(page)
@@ -282,48 +437,48 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
         filters = QHBoxLayout()
-        search_label = label("&Buscar:")
+        search_label = self._label("&Buscar:")
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Nombre, categoría o identificador del objeto…")
-        self.search.setAccessibleName("Buscar objetos y packs")
+        self._set_text(self.search, 'setPlaceholderText', "Nombre, categoría o identificador del objeto…")
+        self._set_text(self.search, 'setAccessibleName', "Buscar objetos y packs")
         search_label.setBuddy(self.search)
         filters.addWidget(search_label)
         filters.addWidget(self.search, 1)
         self.category = QComboBox()
-        self.category.addItems(["Todos"] + list(self.catalog.categories))
-        self.category.setAccessibleName("Filtrar categoría")
+        self._add_items(self.category, ["Todos"] + list(self.catalog.categories))
+        self._set_text(self.category, 'setAccessibleName', "Filtrar categoría")
         self.category.setMaximumWidth(280)
         filters.addWidget(self.category)
         layout.addLayout(filters)
         options = QHBoxLayout()
         self.kind_filter = QComboBox()
-        self.kind_filter.setAccessibleName("Tipo de objeto representado por su ilustración")
-        self.kind_filter.addItem("Todos los tipos", None)
+        self._set_text(self.kind_filter, 'setAccessibleName', "Tipo de objeto representado por su ilustración")
+        self._add_item(self.kind_filter, "Todos los tipos", None)
         kinds = {}
         for item in self.catalog.items:
             description = self.icon_provider.describe(item)
             kinds[description.kind] = description.label
         for kind, name in sorted(kinds.items(), key=lambda pair: pair[1]):
-            self.kind_filter.addItem(name, kind)
+            self._add_item(self.kind_filter, name, kind)
         self.kind_filter.currentIndexChanged.connect(self._filter_catalog)
         options.addWidget(self.kind_filter)
-        self.favorite_filter = button("Solo favoritos", self._filter_catalog)
+        self.favorite_filter = self._button("Solo favoritos", self._filter_catalog)
         self.favorite_filter.setCheckable(True)
         self.favorite_filter.setIcon(control_icon("star"))
-        self.favorite_filter.setToolTip("En Packs, muestra los que contienen algún objeto favorito.")
+        self._set_text(self.favorite_filter, 'setToolTip', "En Packs, muestra los que contienen algún objeto favorito.")
         options.addWidget(self.favorite_filter)
         options.addStretch()
         self.view_mode = QComboBox()
-        self.view_mode.addItems(["Lista", "Tarjetas"])
-        self.view_mode.setAccessibleName("Presentación del catálogo")
+        self._add_items(self.view_mode, ["Lista", "Tarjetas"])
+        self._set_text(self.view_mode, 'setAccessibleName', "Presentación del catálogo")
         options.addWidget(self.view_mode)
-        self.details_toggle = button("Ver ficha", self._toggle_details)
+        self.details_toggle = self._button("Ver ficha", self._toggle_details)
         self.details_toggle.setCheckable(True)
         self.details_toggle.setIcon(control_icon("info-circle"))
         options.addWidget(self.details_toggle)
-        options.addWidget(button("Restablecer", self.reset_catalog))
+        options.addWidget(self._button("Restablecer", self.reset_catalog))
         layout.addLayout(options)
-        self.catalog_path = label("Todo el catálogo", "muted")
+        self.catalog_path = self._label("Todo el catálogo", "muted")
         layout.addWidget(self.catalog_path)
         self.search_timer = QTimer(self)
         self.search_timer.setSingleShot(True)
@@ -333,16 +488,16 @@ class MainWindow(QMainWindow):
         split = QSplitter(Qt.Orientation.Horizontal)
         split.setChildrenCollapsible(False)
         self.catalog_split = split
-        self.navigator = CatalogNavigator(self.catalog, self.icon_provider)
+        self.navigator = CatalogNavigator(self.catalog, self.icon_provider, translator=self.translator)
         self.navigator.setMinimumWidth(200)
         self.navigator.setMaximumWidth(360)
         self.catalog_scope = self.navigator.current_scope()
         self.navigator.scope_changed.connect(self._scope_changed)
         split.addWidget(self.navigator)
         tabs = QTabWidget()
-        self.gallery = GalleryView(self.icon_provider, self.library)
+        self.gallery = GalleryView(self.icon_provider, self.library, translator=self.translator)
         self.item_views = QStackedWidget()
-        self.item_table = table(["Objeto", "Tipo orientativo", "Identificador", "En partida", "Regla"], "Objetos disponibles en el catálogo")
+        self.item_table = self._table(["Objeto", "Tipo orientativo", "Identificador", "En partida", "Regla"], "Objetos disponibles en el catálogo")
         self.item_table.verticalHeader().setDefaultSectionSize(30)
         self.item_table.setIconSize(QSize(24, 24))
         self.item_artwork = RowArtworkDelegate(self.icon_provider, self.library, self.catalog.by_hash, self.item_table)
@@ -356,28 +511,28 @@ class MainWindow(QMainWindow):
         self.item_views.addWidget(self.item_table)
         self.item_views.addWidget(self.gallery)
         self.view_mode.currentIndexChanged.connect(self.item_views.setCurrentIndex)
-        tabs.addTab(self.item_views, "Objetos")
-        self.pack_table = table(["Pack", "Categoría", "Objetos", "Con registro"], "Packs de objetos del catálogo")
+        self._add_tab(tabs, self.item_views, "Objetos")
+        self.pack_table = self._table(["Pack", "Categoría", "Objetos", "Con registro"], "Packs de objetos del catálogo")
         self.pack_table.verticalHeader().setDefaultSectionSize(30)
         self.pack_table.horizontalHeader().setStretchLastSection(False)
         self.pack_table.setColumnWidth(1, 180)
         self.pack_table.setColumnWidth(2, 70)
         self.pack_table.setColumnWidth(3, 100)
         self.pack_table.itemDoubleClicked.connect(lambda *_: self.browse_selected_pack())
-        tabs.addTab(self.pack_table, "Packs")
+        self._add_tab(tabs, self.pack_table, "Packs")
         queue_page = QWidget()
         queue_layout = QVBoxLayout(queue_page)
         queue_layout.setContentsMargins(0, 0, 0, 0)
-        queue_layout.addWidget(label("Prepara varios objetos y revisa las cantidades antes de enviarlos. Añadir el mismo objeto otra vez sustituye su cantidad; no la suma.", "muted", True))
-        self.queue_table = table(["Objeto", "Cantidad a añadir", "Identificador", "En partida"], "Lista de solicitudes pendientes")
+        queue_layout.addWidget(self._label("Prepara varios objetos y revisa las cantidades antes de enviarlos. Añadir el mismo objeto otra vez sustituye su cantidad; no la suma.", "muted", True))
+        self.queue_table = self._table(["Objeto", "Cantidad a añadir", "Identificador", "En partida"], "Lista de solicitudes pendientes")
         queue_layout.addWidget(self.queue_table, 1)
         queue_actions = QHBoxLayout()
-        self.queue_remove = button("Retirar selección", self.remove_queue_selection)
-        self.queue_clear = button("Vaciar lista", self.clear_queue)
+        self.queue_remove = self._button("Retirar selección", self.remove_queue_selection)
+        self.queue_clear = self._button("Vaciar lista", self.clear_queue)
         queue_actions.addWidget(self.queue_remove)
         queue_actions.addWidget(self.queue_clear)
         queue_layout.addLayout(queue_actions)
-        tabs.addTab(queue_page, "Solicitudes (0)")
+        self._add_tab(tabs, queue_page, "Solicitudes (0)")
         self.catalog_tabs = tabs
         self.item_table.itemDoubleClicked.connect(lambda *_: self.reveal_details())
         self.item_table.itemSelectionChanged.connect(self._item_selected)
@@ -395,35 +550,35 @@ class MainWindow(QMainWindow):
         split.setSizes([250, 730, 0])
         layout.addWidget(split, 1)
         counts = QHBoxLayout()
-        self.catalog_count = label("", "muted", True)
+        self.catalog_count = self._label("", "muted", True)
         counts.addWidget(self.catalog_count, 1)
-        self.show_quantities = QCheckBox("Mostrar cantidades")
-        self.show_quantities.setAccessibleName("Mostrar cantidades leídas de la partida en el catálogo")
+        self.show_quantities = self._checkbox("Mostrar cantidades")
+        self._set_text(self.show_quantities, 'setAccessibleName', "Mostrar cantidades leídas de la partida en el catálogo")
         self.show_quantities.setChecked(True)
         self.show_quantities.toggled.connect(self._toggle_quantity_display)
         counts.addWidget(self.show_quantities)
-        self.catalog_refresh = button("Leer cantidades", self.load_inventory)
+        self.catalog_refresh = self._button("Leer cantidades", self.load_inventory)
         self.catalog_refresh.setIcon(control_icon("sync-alt"))
         counts.addWidget(self.catalog_refresh)
         layout.addLayout(counts)
         controls = QHBoxLayout()
-        controls.addWidget(label("Cantidad por objeto:"))
+        controls.addWidget(self._label("Cantidad por objeto:"))
         self.grant_quantity = QSpinBox()
         self.grant_quantity.setRange(1, MAX_STACK_QUANTITY)
         self.grant_quantity.setGroupSeparatorShown(True)
         self.grant_quantity.setValue(1)
-        self.grant_quantity.setAccessibleName("Cantidad que se solicitará de cada objeto")
+        self._set_text(self.grant_quantity, 'setAccessibleName', "Cantidad que se solicitará de cada objeto")
         controls.addWidget(self.grant_quantity)
         controls.addWidget(self.favorite_button)
         controls.addWidget(self.queue_add_button)
-        self.contents_button = button("Abrir pack", self.browse_selected_pack)
+        self.contents_button = self._button("Abrir pack", self.browse_selected_pack)
         controls.addWidget(self.contents_button)
         controls.addStretch()
-        self.grant_button = button("Añadir a la partida", self.grant_selection, True)
+        self.grant_button = self._button("Añadir a la partida", self.grant_selection, True)
         self.grant_button.setIcon(control_icon("plus", True))
         controls.addWidget(self.grant_button)
         layout.addLayout(controls)
-        self.grant_hint = label("Conecta el juego para comprobar si puedes añadir objetos.", "muted", True)
+        self.grant_hint = self._label("Conecta el juego para comprobar si puedes añadir objetos.", "muted", True)
         layout.addWidget(self.grant_hint)
         return page
 
@@ -443,32 +598,32 @@ class MainWindow(QMainWindow):
         self.detail_image = QLabel()
         self.detail_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.detail_image.setMinimumHeight(128)
-        self.detail_image.setAccessibleName("Vista previa del objeto seleccionado")
+        self._set_text(self.detail_image, 'setAccessibleName', "Vista previa del objeto seleccionado")
         box.addWidget(self.detail_image)
-        self.detail_title = label("Selecciona un objeto", "sectionTitle", True)
+        self.detail_title = self._label("Selecciona un objeto", "sectionTitle", True)
         box.addWidget(self.detail_title)
-        self.detail_category = label("Explora la galería o busca por nombre.", "muted", True)
+        self.detail_category = self._label("Explora la galería o busca por nombre.", "muted", True)
         box.addWidget(self.detail_category)
-        self.detail_source = label("Las ilustraciones se crean a partir del significado del nombre; no representan necesariamente su aspecto en el juego.", "muted", True)
+        self.detail_source = self._label("Las ilustraciones se crean a partir del significado del nombre; no representan necesariamente su aspecto en el juego.", "muted", True)
         box.addWidget(self.detail_source)
-        self.detail_state = label("", "muted", True)
+        self.detail_state = self._label("", "muted", True)
         box.addWidget(self.detail_state)
-        self.favorite_button = button("Favorito", self.toggle_favorite)
+        self.favorite_button = self._button("Favorito", self.toggle_favorite)
         self.favorite_button.setIcon(control_icon("star"))
-        self.favorite_button.setAccessibleName("Guardar o quitar favorito")
-        self.preview_button = button("Ampliar imagen", self.show_large_image)
+        self._set_text(self.favorite_button, 'setAccessibleName', "Guardar o quitar favorito")
+        self.preview_button = self._button("Ampliar imagen", self.show_large_image)
         self.preview_button.setIcon(control_icon("search-plus"))
         box.addWidget(self.preview_button)
-        self.pack_preview_button = button("Ver contenido del pack", self.show_pack_contents)
+        self.pack_preview_button = self._button("Ver contenido del pack", self.show_pack_contents)
         box.addWidget(self.pack_preview_button)
-        self.queue_add_button = button("Preparar", self.queue_selection)
+        self.queue_add_button = self._button("Preparar", self.queue_selection)
         self.queue_add_button.setIcon(control_icon("list-ul"))
-        self.queue_add_button.setAccessibleName("Añadir el objeto o pack a la lista de solicitudes")
-        self.queue_add_button.setToolTip("Añadir a la lista con la cantidad indicada abajo")
-        self.import_image_button = button("Elegir mi imagen…", self.import_item_image)
+        self._set_text(self.queue_add_button, 'setAccessibleName', "Añadir el objeto o pack a la lista de solicitudes")
+        self._set_text(self.queue_add_button, 'setToolTip', "Añadir a la lista con la cantidad indicada abajo")
+        self.import_image_button = self._button("Elegir mi imagen…", self.import_item_image)
         self.import_image_button.setIcon(control_icon("image"))
         box.addWidget(self.import_image_button)
-        self.reset_image_button = button("Usar ilustración", self.reset_item_image)
+        self.reset_image_button = self._button("Usar ilustración", self.reset_item_image)
         box.addWidget(self.reset_image_button)
         box.addStretch()
         scroll.setWidget(panel)
@@ -478,7 +633,7 @@ class MainWindow(QMainWindow):
     def _toggle_details(self, *args):
         visible = self.details_toggle.isChecked()
         self.detail_panel.setVisible(visible)
-        self.details_toggle.setText("Ocultar ficha" if visible else "Ver ficha")
+        self._set_text(self.details_toggle, 'setText', "Ocultar ficha" if visible else "Ver ficha")
         if visible:
             self.catalog_split.setSizes([230, 460, 290])
 
@@ -497,15 +652,22 @@ class MainWindow(QMainWindow):
         self.favorite_filter.setChecked(False)
         for widget in (self.search, self.category, self.kind_filter, self.favorite_filter):
             widget.blockSignals(False)
-        self.catalog_path.setText(self.navigator.breadcrumb())
-        self.catalog_path.setToolTip(self.navigator.breadcrumb())
-        self.search.setPlaceholderText("Buscar dentro de «" + scope.title + "»…")
+        self._refresh_scope_text()
         self.catalog_tabs.setCurrentIndex(1 if scope.mode == "packs" else 0)
         self._filter_catalog()
         if scope.pack_id:
             pack = self.catalog.by_pack[scope.pack_id]
             self.grant_quantity.setValue(min(pack.quantity, self.grant_quantity.maximum()))
             self._show_detail(pack=pack)
+
+    def _refresh_scope_text(self):
+        self._set_text(self.catalog_path, 'setText', self.navigator.breadcrumb())
+        self._set_text(self.catalog_path, 'setToolTip', self.navigator.breadcrumb())
+        if self.catalog_scope and self.catalog_scope.key != "all":
+            title = self.translator.category(self.catalog_scope.title)
+            self._set_text(self.search, 'setPlaceholderText', "Buscar dentro de «" + title + "»…")
+        else:
+            self._set_text(self.search, 'setPlaceholderText', "Nombre, categoría o identificador del objeto…")
 
     def reset_catalog(self):
         self.navigator.reset_scope()
@@ -520,12 +682,12 @@ class MainWindow(QMainWindow):
         out = QVBoxLayout(page)
         out.setContentsMargins(0, 0, 0, 0)
         line = QHBoxLayout()
-        line.addWidget(label("Inventario de tu partida", "sectionTitle"), 1)
-        self.inventory_refresh = button("Actualizar desde partida", self.load_inventory)
+        line.addWidget(self._label("Inventario de tu partida", "sectionTitle"), 1)
+        self.inventory_refresh = self._button("Actualizar desde partida", self.load_inventory)
         line.addWidget(self.inventory_refresh)
         out.addLayout(line)
-        out.addWidget(label("Se lee al abrir esta sección y después de añadir objetos. Cada cambio vuelve a comprobar el objeto y su ubicación.", "muted", True))
-        self.inventory_table = table(["Objeto", "Cantidad", "Identificador"], "Inventario actual de la partida")
+        out.addWidget(self._label("Se lee al abrir esta sección y después de añadir objetos. Cada cambio vuelve a comprobar el objeto y su ubicación.", "muted", True))
+        self.inventory_table = self._table(["Objeto", "Cantidad", "Identificador"], "Inventario actual de la partida")
         self.inventory_table.itemSelectionChanged.connect(self._inventory_selection)
         self.inventory_tabs = QTabWidget()
         actual = QWidget()
@@ -533,36 +695,36 @@ class MainWindow(QMainWindow):
         actual_layout.setContentsMargins(0, 0, 0, 0)
         actual_layout.addWidget(self.inventory_table, 1)
         row = QHBoxLayout()
-        self.inventory_selected = label("Selecciona un objeto.", "muted", True)
+        self.inventory_selected = self._label("Selecciona un objeto.", "muted", True)
         row.addWidget(self.inventory_selected, 1)
-        quantity_label = label("&Nueva cantidad:")
+        quantity_label = self._label("&Nueva cantidad:")
         self.new_quantity = QSpinBox()
         self.new_quantity.setRange(0, MAX_STACK_QUANTITY)
         self.new_quantity.setGroupSeparatorShown(True)
-        self.new_quantity.setAccessibleName("Nueva cantidad del objeto seleccionado")
+        self._set_text(self.new_quantity, 'setAccessibleName', "Nueva cantidad del objeto seleccionado")
         quantity_label.setBuddy(self.new_quantity)
         row.addWidget(quantity_label)
         row.addWidget(self.new_quantity)
-        self.quantity_button = button("Aplicar cantidad", self.apply_quantity, True)
+        self.quantity_button = self._button("Aplicar cantidad", self.apply_quantity, True)
         row.addWidget(self.quantity_button)
         actual_layout.addLayout(row)
-        actual_layout.addWidget(label("Cambiar a cero puede retirar el objeto de la partida. Comprueba el resultado antes de guardar.", "muted", True))
-        self.inventory_tabs.addTab(actual, "Inventario actual")
+        actual_layout.addWidget(self._label("Cambiar a cero puede retirar el objeto de la partida. Comprueba el resultado antes de guardar.", "muted", True))
+        self._add_tab(self.inventory_tabs, actual, "Inventario actual")
         recovery = QWidget()
         recovery_layout = QVBoxLayout(recovery)
         recovery_layout.setContentsMargins(0, 0, 0, 0)
-        recovery_layout.addWidget(label("Resolver recursos ausentes («??»)", "sectionTitle"))
-        recovery_layout.addWidget(label("La reparación solicita una unidad de cada recurso básico que no tenga registro y vuelve a comprobarlo. No añade unidades a registros que ya existen ni desbloquea contenido o progreso pendiente.", "muted", True))
-        self.resource_table = table(["Recurso", "Grupo", "Cantidad", "Estado", "Detalle"], "Estado de los recursos y explicación de valores ausentes")
+        recovery_layout.addWidget(self._label("Resolver recursos ausentes («??»)", "sectionTitle"))
+        recovery_layout.addWidget(self._label("La reparación solicita una unidad de cada recurso básico que no tenga registro y vuelve a comprobarlo. No añade unidades a registros que ya existen ni desbloquea contenido o progreso pendiente.", "muted", True))
+        self.resource_table = self._table(["Recurso", "Grupo", "Cantidad", "Estado", "Detalle"], "Estado de los recursos y explicación de valores ausentes")
         self.resource_table.setColumnWidth(1, 155)
         self.resource_table.setColumnWidth(2, 90)
         self.resource_table.setColumnWidth(3, 165)
         recovery_layout.addWidget(self.resource_table, 1)
-        self.resource_hint = label("Actualiza el inventario para comprobar los recursos. Ausente no significa cantidad cero.", "notice", True)
+        self.resource_hint = self._label("Actualiza el inventario para comprobar los recursos. Ausente no significa cantidad cero.", "notice", True)
         recovery_layout.addWidget(self.resource_hint)
-        self.repair_button = button("Añadir 1 a cada recurso básico ausente y comprobar", self.repair_resources, True)
+        self.repair_button = self._button("Añadir 1 a cada recurso básico ausente y comprobar", self.repair_resources, True)
         recovery_layout.addWidget(self.repair_button)
-        self.inventory_tabs.addTab(recovery, "Recursos ausentes")
+        self._add_tab(self.inventory_tabs, recovery, "Recursos ausentes")
         out.addWidget(self.inventory_tabs, 1)
         return page
 
@@ -573,8 +735,8 @@ class MainWindow(QMainWindow):
         page = QWidget()
         out = QVBoxLayout(page)
         out.setContentsMargins(0, 0, 6, 0)
-        out.addWidget(label("Ayudas para tu partida", "sectionTitle"))
-        out.addWidget(label("Las opciones temporales se restauran al desconectar. Los objetos y recompensas pueden quedar guardados en la partida.", "muted", True))
+        out.addWidget(self._label("Ayudas para tu partida", "sectionTitle"))
+        out.addWidget(self._label("Las opciones temporales se restauran al desconectar. Los objetos y recompensas pueden quedar guardados en la partida.", "muted", True))
         grid = QGridLayout()
         self.helper_buttons = {}
         titles = {
@@ -590,32 +752,32 @@ class MainWindow(QMainWindow):
             frame.setObjectName("card")
             box = QVBoxLayout(frame)
             box.setContentsMargins(17, 16, 17, 16)
-            box.addWidget(label(title, "sectionTitle", True))
-            box.addWidget(label(description, "muted", True))
-            reason = label("Pendiente de comprobar", "muted", True)
+            box.addWidget(self._label(title, "sectionTitle", True))
+            box.addWidget(self._label(description, "muted", True))
+            reason = self._label("Pendiente de comprobar", "muted", True)
             box.addWidget(reason)
-            action = button("Activar", lambda checked=False, k=key: self.toggle_helper(k))
-            action.setAccessibleName(f"Activar o desactivar {title}")
+            action = self._button("Activar", lambda checked=False, k=key: self.toggle_helper(k))
+            self._set_text(action, 'setAccessibleName', f"Activar o desactivar {title}")
             box.addWidget(action)
             self.helper_buttons[key] = action
             self.helper_reasons[key] = reason
             grid.addWidget(frame, index // 2, index % 2)
         out.addLayout(grid)
         permanent = QHBoxLayout()
-        permanent.addWidget(label("Multiplicador de plata y experiencia:"))
+        permanent.addWidget(self._label("Multiplicador de plata y experiencia:"))
         self.multiplier = QDoubleSpinBox()
         self.multiplier.setRange(1, 6)
         self.multiplier.setSingleStep(0.5)
         self.multiplier.setValue(1.5)
         self.multiplier.setSuffix(" ×")
-        self.multiplier.setAccessibleName("Multiplicador de plata y experiencia")
+        self._set_text(self.multiplier, 'setAccessibleName', "Multiplicador de plata y experiencia")
         permanent.addWidget(self.multiplier)
-        self.boost_button = button("Aplicar multiplicador", self.apply_boost)
+        self.boost_button = self._button("Aplicar multiplicador", self.apply_boost)
         permanent.addWidget(self.boost_button)
         out.addLayout(permanent)
-        self.map_button = button("Solicitar revelado del mapa", self.reveal_map)
+        self.map_button = self._button("Solicitar revelado del mapa", self.reveal_map)
         out.addWidget(self.map_button)
-        out.addWidget(label("Tiendas remotas y edición del objeto equipado: pendientes de una adaptación verificable. Puedes gestionar los objetos y sus cantidades desde las otras secciones.", "notice", True))
+        out.addWidget(self._label("Tiendas remotas y edición del objeto equipado: pendientes de una adaptación verificable. Puedes gestionar los objetos y sus cantidades desde las otras secciones.", "notice", True))
         out.addStretch()
         scroll.setWidget(page)
         return scroll
@@ -625,20 +787,20 @@ class MainWindow(QMainWindow):
         out = QVBoxLayout(page)
         out.setContentsMargins(0, 0, 0, 0)
         row = QHBoxLayout()
-        row.addWidget(label("Compatibilidad por función", "sectionTitle"), 1)
-        self.diagnose_button = button("Volver a comprobar", self.diagnose_game)
+        row.addWidget(self._label("Compatibilidad por función", "sectionTitle"), 1)
+        self.diagnose_button = self._button("Volver a comprobar", self.diagnose_game)
         row.addWidget(self.diagnose_button)
         out.addLayout(row)
-        out.addWidget(label("Una firma ausente o ambigua bloquea la función correspondiente. Reconocer una firma todavía no confirma su comportamiento dentro del juego.", "muted", True))
-        self.feature_table = table(["Función", "Estado", "Detalle"], "Resultado de compatibilidad por función")
+        out.addWidget(self._label("Una firma ausente o ambigua bloquea la función correspondiente. Reconocer una firma todavía no confirma su comportamiento dentro del juego.", "muted", True))
+        self.feature_table = self._table(["Función", "Estado", "Detalle"], "Resultado de compatibilidad por función")
         self.feature_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self.feature_table.setColumnWidth(1, 175)
         out.addWidget(self.feature_table, 1)
         self.process_details = QPlainTextEdit()
         self.process_details.setReadOnly(True)
         self.process_details.setMaximumHeight(150)
-        self.process_details.setAccessibleName("Información del proceso y procedencia del catálogo")
-        self.process_details.setPlainText("Adjunta un proceso para ver sus datos.\nFuente del catálogo: tabla comunitaria AC Valhalla Inventory Editor.\nEl nombre del archivo indica 1.6.2; sus comentarios declaran 1.5.3.\nLa comprobación se realiza sobre el código del proceso, función por función.")
+        self._set_text(self.process_details, 'setAccessibleName', "Información del proceso y procedencia del catálogo")
+        self._set_text(self.process_details, 'setPlainText', "Adjunta un proceso para ver sus datos.\nFuente del catálogo: tabla comunitaria AC Valhalla Inventory Editor.\nEl nombre del archivo indica 1.6.2; sus comentarios declaran 1.5.3.\nLa comprobación se realiza sobre el código del proceso, función por función.")
         out.addWidget(self.process_details)
         return page
 
@@ -647,32 +809,44 @@ class MainWindow(QMainWindow):
         out = QVBoxLayout(page)
         out.setContentsMargins(0, 0, 0, 0)
         row = QHBoxLayout()
-        row.addWidget(label("Actividad y resultados", "sectionTitle"), 1)
-        row.addWidget(button("Guardar diagnóstico…", self.export_diagnostics))
+        row.addWidget(self._label("Actividad y resultados", "sectionTitle"), 1)
+        row.addWidget(self._button("Guardar diagnóstico…", self.export_diagnostics))
         out.addLayout(row)
         self.activity = QPlainTextEdit()
         self.activity.setReadOnly(True)
         self.activity.setMaximumBlockCount(1500)
-        self.activity.setAccessibleName("Historial de operaciones y mensajes de error")
+        self._set_text(self.activity, 'setAccessibleName', "Historial de operaciones y mensajes de error")
         out.addWidget(self.activity, 1)
         return page
 
     def _menus(self):
-        menu = self.menuBar().addMenu("&Ver")
+        menu = self._add_menu(self.menuBar(), "&Ver")
         for title, shortcut, callback in [
             ("Texto más grande", "Ctrl++", lambda: self._resize_text(0.1)),
             ("Texto más pequeño", "Ctrl+-", lambda: self._resize_text(-0.1)),
             ("Tamaño original", "Ctrl+0", lambda: self._resize_text(reset=True)),
             ("Buscar en catálogo", "Ctrl+F", self.focus_search),
         ]:
-            action = QAction(title, self)
+            action = self._action(title, self)
             action.setShortcut(QKeySequence(shortcut))
             action.triggered.connect(callback)
             menu.addAction(action)
-        help_menu = self.menuBar().addMenu("A&yuda")
-        action = QAction("Acerca de y créditos", self)
+        help_menu = self._add_menu(self.menuBar(), "A&yuda")
+        action = self._action("Acerca de y créditos", self)
         action.triggered.connect(self.about)
         help_menu.addAction(action)
+        language_menu = self._add_menu(self.menuBar(), "Language / Idioma")
+        group = QActionGroup(self)
+        group.setExclusive(True)
+        self.language_actions = {}
+        for code, name in (("en", "English"), ("es", "Español")):
+            action = QAction(name, self)
+            action.setCheckable(True)
+            action.setChecked(code == self.translator.language)
+            action.triggered.connect(lambda checked=False, selected=code: self.set_language(selected))
+            group.addAction(action)
+            language_menu.addAction(action)
+            self.language_actions[code] = action
 
     def _resize_text(self, delta=0, reset=False):
         self._size = 1 if reset else max(0.9, min(1.5, self._size + delta))
@@ -693,8 +867,8 @@ class MainWindow(QMainWindow):
             ("Comprueba la conexión.", "Revisa qué funciones están disponibles para tu versión del juego."),
             ("Cada acción, a la vista.", "Consulta los resultados de las operaciones y guarda un diagnóstico."),
         ]
-        self.heading.setText(headings[index][0])
-        self.subtitle.setText(headings[index][1])
+        self._set_text(self.heading, 'setText', headings[index][0])
+        self._set_text(self.subtitle, 'setText', headings[index][1])
         self.heading.setVisible(index != 1)
         self.subtitle.setVisible(index != 1)
         for i, item in enumerate(self.nav_buttons):
@@ -707,7 +881,7 @@ class MainWindow(QMainWindow):
         self.search.setFocus()
 
     def _fill_items(self):
-        self.display_items = self.catalog.search(self.search.text(), self.category.currentText())
+        self.display_items = self.catalog.search(self.search.text(), self.category.currentData() or "Todos")
         if self.catalog_scope and self.catalog_scope.hashes is not None:
             self.display_items = [item for item in self.display_items if item.hash_id in self.catalog_scope.hashes]
         kind = self.kind_filter.currentData()
@@ -724,10 +898,10 @@ class MainWindow(QMainWindow):
         for row, item in enumerate(self.display_items):
             name = ("★ " if self.library.is_favorite(item.hash_id) else "") + item.name
             for column, text in enumerate([name, self.icon_provider.describe(item).label, item.hash_id, self._quantity_text(item.hash_id), self._quantity_rule_text(item.hash_id)]):
-                cell = QTableWidgetItem(str(text))
-                cell.setToolTip(f"{item.name}\n{' · '.join(item.categories)}\n{item.hash_id}\nIlustración semántica; abre la ficha para consultar o cambiar la imagen.")
+                cell = self._cell(str(text))
+                self._set_text(cell, 'setToolTip', f"{item.name}\n{' · '.join(self.translator.category(value) for value in item.categories)}\n{item.hash_id}\nIlustración semántica; abre la ficha para consultar o cambiar la imagen.")
                 if column == 4:
-                    cell.setToolTip(self.quantity_policy.rule(item.hash_id).reason)
+                    self._set_text(cell, 'setToolTip', self.quantity_policy.rule(item.hash_id).reason)
                 if column == 0:
                     cell.setData(Qt.ItemDataRole.UserRole, item.hash_id)
                 self.item_table.setItem(row, column, cell)
@@ -744,7 +918,7 @@ class MainWindow(QMainWindow):
         def normalized(text):
             return "".join(c for c in unicodedata.normalize("NFKD", text.casefold()) if not unicodedata.combining(c))
         query = normalized(self.search.text().strip())
-        category = self.category.currentText()
+        category = self.category.currentData() or "Todos"
         terms = query.split()
         self.display_packs = [p for p in self.catalog.packs if (category == "Todos" or p.category == category) and all(term in normalized(p.name + " " + p.category + " " + " ".join(self.catalog.pack_paths[p.id])) for term in terms)]
         if self.catalog_scope and self.catalog_scope.pack_ids is not None:
@@ -759,9 +933,9 @@ class MainWindow(QMainWindow):
         self.pack_table.setCurrentCell(-1, -1)
         self.pack_table.setRowCount(len(self.display_packs))
         for row, pack in enumerate(self.display_packs):
-            for column, text in enumerate([pack.name, pack.category, len(pack.hashes), self._pack_quantity_text(pack)]):
-                cell = QTableWidgetItem(str(text))
-                cell.setToolTip(f"{pack.name}\n{' / '.join(self.catalog.pack_paths[pack.id])}\nDoble clic para abrir sus {len(pack.hashes)} objetos.")
+            for column, text in enumerate([pack.name, self.translator.category(pack.category), len(pack.hashes), self._pack_quantity_text(pack)]):
+                cell = self._cell(str(text))
+                self._set_text(cell, 'setToolTip', f"{pack.name}\n{' / '.join(self.translator.category(value) for value in self.catalog.pack_paths[pack.id])}\nDoble clic para abrir sus {len(pack.hashes)} objetos.")
                 if column == 0:
                     cell.setIcon(control_icon("box-open"))
                 self.pack_table.setItem(row, column, cell)
@@ -809,8 +983,8 @@ class MainWindow(QMainWindow):
             self._pack_selected()
         else:
             self._show_detail()
-            self.detail_title.setText("Tu lista de solicitudes")
-            self.detail_category.setText("Las cantidades se aplican por objeto. Revisa la lista antes de ejecutarla.")
+            self._set_text(self.detail_title, 'setText', "Tu lista de solicitudes")
+            self._set_text(self.detail_category, 'setText', "Las cantidades se aplican por objeto. Revisa la lista antes de ejecutarla.")
         self._refresh_controls()
 
     def _item_pixmap(self, item, size=160):
@@ -826,15 +1000,15 @@ class MainWindow(QMainWindow):
         hashes = [item.hash_id] if item else (list(pack.hashes) if pack else [])
         if hashes:
             self.grant_quantity.setMaximum(self.quantity_policy.limit(item.hash_id) if item else self.quantity_policy.limit_for(hashes))
-            self.grant_quantity.setToolTip(self.quantity_policy.rule(hashes[0]).reason if item else "Cada pieza de equipo se limita a una unidad; los recursos mantienen la cantidad indicada.")
+            self._set_text(self.grant_quantity, 'setToolTip', self.quantity_policy.rule(hashes[0]).reason if item else "Cada pieza de equipo se limita a una unidad; los recursos mantienen la cantidad indicada.")
         else:
             self.grant_quantity.setMaximum(MAX_STACK_QUANTITY)
         if item:
             self.detail_image.setPixmap(self._item_pixmap(item))
-            self.detail_title.setText(item.name)
+            self._set_text(self.detail_title, 'setText', item.name)
             description = self.icon_provider.describe(item)
-            self.detail_category.setText(" · ".join(item.categories) + "\n" + description.label)
-            self.detail_source.setText("Imagen importada por ti." if self.library.image_path(item.hash_id) else "Ilustración semántica original. Su aspecto en el juego puede ser diferente.")
+            self._set_text(self.detail_category, 'setText', " · ".join(self.translator.category(category) for category in item.categories) + "\n" + description.label)
+            self._set_text(self.detail_source, 'setText', "Imagen importada por ti." if self.library.image_path(item.hash_id) else "Ilustración semántica original. Su aspecto en el juego puede ser diferente.")
             current = self._known_quantity(item.hash_id)
             state = f"Última lectura: {self._format_quantity(current)} unidades." if current is not None else ("Sin registro en la última lectura." if self._snapshot_available() else "Conecta y lee el inventario para consultar su cantidad.")
             rule = self.quantity_policy.rule(item.hash_id)
@@ -842,21 +1016,21 @@ class MainWindow(QMainWindow):
                 state += " Equipo protegido: una unidad; si ya está presente se omite."
                 if current is not None and current > 1:
                     state += " Hay varias unidades en la lectura; no se añadirán más."
-            self.detail_state.setText(state)
-            self.favorite_button.setText("Guardado" if self.library.is_favorite(item.hash_id) else "Favorito")
+            self._set_text(self.detail_state, 'setText', state)
+            self._set_text(self.favorite_button, 'setText', "Guardado" if self.library.is_favorite(item.hash_id) else "Favorito")
             self.favorite_button.setIcon(control_icon("star", self.library.is_favorite(item.hash_id)))
         elif pack:
             self.detail_image.setPixmap(self.icon_provider.pack_pixmap(pack, self.catalog, 160))
-            self.detail_title.setText(pack.name)
-            self.detail_category.setText(f"{pack.category}\n{len(pack.hashes)} objetos · cantidad predeterminada: {pack.quantity}")
-            self.detail_source.setText("Ilustración del pack. Abre su contenido para revisar cada objeto.")
-            self.detail_state.setText("Puedes prepararlo en la lista de solicitudes antes de conectar el juego.")
+            self._set_text(self.detail_title, 'setText', pack.name)
+            self._set_text(self.detail_category, 'setText', f"{self.translator.category(pack.category)}\n{len(pack.hashes)} objetos · cantidad predeterminada: {pack.quantity}")
+            self._set_text(self.detail_source, 'setText', "Ilustración del pack. Abre su contenido para revisar cada objeto.")
+            self._set_text(self.detail_state, 'setText', "Puedes prepararlo en la lista de solicitudes antes de conectar el juego.")
         else:
             self.detail_image.clear()
-            self.detail_title.setText("Selecciona un objeto")
-            self.detail_category.setText("Explora las tarjetas, los packs o utiliza el buscador.")
-            self.detail_source.setText("Los iconos inventados se identifican como ilustraciones; puedes sustituirlos por tus imágenes.")
-            self.detail_state.setText("")
+            self._set_text(self.detail_title, 'setText', "Selecciona un objeto")
+            self._set_text(self.detail_category, 'setText', "Explora las tarjetas, los packs o utiliza el buscador.")
+            self._set_text(self.detail_source, 'setText', "Los iconos inventados se identifican como ilustraciones; puedes sustituirlos por tus imágenes.")
+            self._set_text(self.detail_state, 'setText', "")
         self._refresh_controls()
 
     def toggle_favorite(self):
@@ -871,16 +1045,16 @@ class MainWindow(QMainWindow):
                 self.gallery.refresh_visuals()
                 row = self._display_by_hash.get(item.hash_id)
                 if row is not None:
-                    self.item_table.item(row, 0).setText(("★ " if self.library.is_favorite(item.hash_id) else "") + item.name)
+                    self._set_text(self.item_table.item(row, 0), 'setText', ("★ " if self.library.is_favorite(item.hash_id) else "") + item.name)
                 self._show_detail(item=item)
         except (OSError, ValueError) as exc:
-            QMessageBox.warning(self, "No se pudo guardar el favorito", str(exc))
+            QMessageBox.warning(self, self.t("No se pudo guardar el favorito"), self.t(str(exc)))
 
     def import_item_image(self):
         item = self.detail_item
         if not item:
             return
-        source, _ = QFileDialog.getOpenFileName(self, "Elegir imagen del objeto", "", "Imágenes (*.png *.jpg *.jpeg *.webp)")
+        source, _ = QFileDialog.getOpenFileName(self, self.t("Elegir imagen del objeto"), "", self.t("Imágenes (*.png *.jpg *.jpeg *.webp)"), options=QFileDialog.Option.DontUseNativeDialog)
         if not source:
             return
         try:
@@ -891,7 +1065,7 @@ class MainWindow(QMainWindow):
             self._show_detail(item=item)
             self._activity("Imagen local guardada para " + item.name)
         except (OSError, ValueError) as exc:
-            QMessageBox.warning(self, "No se pudo importar la imagen", str(exc))
+            QMessageBox.warning(self, self.t("No se pudo importar la imagen"), self.t(str(exc)))
 
     def reset_item_image(self):
         if self.detail_item:
@@ -903,25 +1077,25 @@ class MainWindow(QMainWindow):
                 self.item_table.viewport().update()
                 self._show_detail(item=item)
             except (OSError, ValueError) as exc:
-                QMessageBox.warning(self, "No se pudo restablecer la ilustración", str(exc))
+                QMessageBox.warning(self, self.t("No se pudo restablecer la ilustración"), self.t(str(exc)))
 
     def show_large_image(self):
         item, pack = self.detail_item, self.detail_pack
         if not item and not pack:
             return
         dialog = QDialog(self)
-        dialog.setWindowTitle(item.name if item else pack.name)
+        self._set_text(dialog, 'setWindowTitle', item.name if item else pack.name)
         dialog.resize(580, 650)
         layout = QVBoxLayout(dialog)
-        title = label(item.name if item else pack.name, "sectionTitle", True)
+        title = self._label(item.name if item else pack.name, "sectionTitle", True)
         layout.addWidget(title)
         picture = QLabel()
         picture.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        picture.setAccessibleName("Imagen ampliada del objeto o pack")
+        self._set_text(picture, 'setAccessibleName', "Imagen ampliada del objeto o pack")
         picture.setPixmap(self._item_pixmap(item, 480) if item else self.icon_provider.pack_pixmap(pack, self.catalog, 480))
         layout.addWidget(picture, 1)
-        layout.addWidget(label(self.detail_source.text(), "muted", True))
-        layout.addWidget(button("Cerrar", dialog.accept))
+        layout.addWidget(self._label(self.detail_source.text(), "muted", True))
+        layout.addWidget(self._button("Cerrar", dialog.accept))
         dialog.exec()
 
     def show_pack_contents(self):
@@ -929,12 +1103,12 @@ class MainWindow(QMainWindow):
         if not pack:
             return
         dialog = QDialog(self)
-        dialog.setWindowTitle("Contenido · " + pack.name)
+        self._set_text(dialog, 'setWindowTitle', "Contenido · " + pack.name)
         dialog.resize(850, 660)
         layout = QVBoxLayout(dialog)
-        layout.addWidget(label(pack.name, "sectionTitle", True))
-        layout.addWidget(label(f"{len(pack.hashes)} objetos. Abre una tarjeta para ver ese objeto en el catálogo.", "muted", True))
-        preview = GalleryView(self.icon_provider, self.library)
+        layout.addWidget(self._label(pack.name, "sectionTitle", True))
+        layout.addWidget(self._label(f"{len(pack.hashes)} objetos. Abre una tarjeta para ver ese objeto en el catálogo.", "muted", True))
+        preview = GalleryView(self.icon_provider, self.library, translator=self.translator)
         preview.set_items([self.catalog.by_hash[h] for h in pack.hashes])
         layout.addWidget(preview, 1)
         def open_item(item):
@@ -949,7 +1123,7 @@ class MainWindow(QMainWindow):
             self._filter_catalog()
             self.gallery.select_hash(item.hash_id)
         preview.activated.connect(open_item)
-        layout.addWidget(button("Cerrar vista previa", dialog.accept))
+        layout.addWidget(self._button("Cerrar vista previa", dialog.accept))
         dialog.exec()
 
     def queue_selection(self):
@@ -969,7 +1143,7 @@ class MainWindow(QMainWindow):
             self._fill_queue()
             self._activity(f"Lista preparada: {self.request_queue.count} objetos distintos.")
         except ValueError as exc:
-            QMessageBox.warning(self, "No se pudo añadir a la lista", str(exc))
+            QMessageBox.warning(self, self.t("No se pudo añadir a la lista"), self.t(str(exc)))
 
     def _fill_queue(self):
         entries = self.request_queue.entries
@@ -977,8 +1151,8 @@ class MainWindow(QMainWindow):
         for row, entry in enumerate(entries):
             item = self.catalog.by_hash.get(entry.hash_id)
             for column, text in enumerate([item.name if item else entry.label, entry.quantity, entry.hash_id, self._quantity_text(entry.hash_id)]):
-                self.queue_table.setItem(row, column, QTableWidgetItem(str(text)))
-        self.catalog_tabs.setTabText(2, f"Solicitudes ({len(entries)})")
+                self.queue_table.setItem(row, column, self._cell(str(text)))
+        self._set_tab_text(self.catalog_tabs, 2, f"Solicitudes ({len(entries)})")
         self._refresh_controls()
 
     def remove_queue_selection(self):
@@ -999,7 +1173,7 @@ class MainWindow(QMainWindow):
         summary = "\n".join(f"{self.catalog.by_hash[e.hash_id].name}: {e.quantity}" for e in entries[:8])
         if len(entries) > 8:
             summary += f"\n… y {len(entries) - 8} objetos más."
-        if QMessageBox.question(self, "Revisar lista de solicitudes", f"Se solicitarán {len(entries)} objetos distintos:\n\n{summary}\n\n¿Enviar esta lista a la partida conectada?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+        if QMessageBox.question(self, self.t("Revisar lista de solicitudes"), self.t(f"Se solicitarán {len(entries)} objetos distintos:\n\n{summary}\n\n¿Enviar esta lista a la partida conectada?"), QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
             return
         def done(result):
             for hash_id in result.attempted:
@@ -1016,17 +1190,16 @@ class MainWindow(QMainWindow):
                 self._activity(warning)
             if result.error:
                 self._activity(result.error)
-                QMessageBox.warning(self, "Se detuvo la lista", result.error)
+                QMessageBox.warning(self, self.t("Se detuvo la lista"), self.t(result.error))
         self._run("Ejecutar lista de solicitudes", lambda: execute_requests(self.session, entries, self.worker.cancel, self.worker.progress.emit), done)
 
     def _catalog_counts(self):
         if hasattr(self, "catalog_count"):
             status = ("Lectura " + self.inventory_loaded_at.strftime("%H:%M:%S")) if self._snapshot_available() else "Sin lectura de la partida"
-            self.catalog_count.setText(f"{len(self.display_items)} objetos · {len(self.display_packs)} packs · {status}")
+            self._set_text(self.catalog_count, 'setText', f"{len(self.display_items)} objetos · {len(self.display_packs)} packs · {status}")
 
-    @staticmethod
-    def _format_quantity(value):
-        return f"{value:,}".replace(",", ".")
+    def _format_quantity(self, value):
+        return f"{value:,}".replace(",", ".") if self.translator.language == "es" else f"{value:,}"
 
     def _snapshot_available(self):
         return bool(self.inventory_loaded_at is not None and self.session is not None and
@@ -1067,11 +1240,11 @@ class MainWindow(QMainWindow):
         self.pack_table.setColumnHidden(3, not visible)
         self.queue_table.setColumnHidden(3, not visible)
         for row, item in enumerate(self.display_items):
-            self.item_table.setItem(row, 3, QTableWidgetItem(self._quantity_text(item.hash_id)))
+            self.item_table.setItem(row, 3, self._cell(self._quantity_text(item.hash_id)))
         for row, pack in enumerate(self.display_packs):
-            self.pack_table.setItem(row, 3, QTableWidgetItem(self._pack_quantity_text(pack)))
+            self.pack_table.setItem(row, 3, self._cell(self._pack_quantity_text(pack)))
         for row, entry in enumerate(self.request_queue.entries):
-            self.queue_table.setItem(row, 3, QTableWidgetItem(self._quantity_text(entry.hash_id)))
+            self.queue_table.setItem(row, 3, self._cell(self._quantity_text(entry.hash_id)))
         self._update_gallery_quantities()
         self._catalog_counts()
         self._refresh_controls()
@@ -1087,10 +1260,13 @@ class MainWindow(QMainWindow):
         self._refresh_controls()
 
     def _activity(self, text):
+        stamp = f"{datetime.now():%H:%M:%S}"
+        self._activity_messages.append((stamp, text))
+        self._activity_messages = self._activity_messages[-1500:]
         if hasattr(self, "activity"):
-            self.activity.appendPlainText(f"{datetime.now():%H:%M:%S}  {text}")
+            self.activity.appendPlainText(stamp + "  " + self.t(text))
         LOG.info(text)
-        self.statusBar().showMessage(text)
+        self._set_text(self.statusBar(), 'showMessage', text)
 
     def refresh_processes(self):
         if self.busy:
@@ -1100,15 +1276,15 @@ class MainWindow(QMainWindow):
         try:
             found = list_games()
             for item in found:
-                self.processes.addItem(f"{item.name}  ·  PID {item.pid}", item.pid)
+                self._add_item(self.processes, f"{item.name}  ·  PID {item.pid}", item.pid)
             if not found:
-                self.processes.addItem("No se encontró un proceso de Valhalla", None)
+                self._add_item(self.processes, "No se encontró un proceso de Valhalla", None)
             elif previous:
                 index = self.processes.findData(previous)
                 if index >= 0:
                     self.processes.setCurrentIndex(index)
         except Exception as exc:
-            self.processes.addItem("No se pudo consultar el juego", None)
+            self._add_item(self.processes, "No se pudo consultar el juego", None)
             self._activity(str(exc))
         self._refresh_controls()
 
@@ -1135,7 +1311,7 @@ class MainWindow(QMainWindow):
         tab = self.catalog_tabs.currentIndex()
         selected = (self.detail_item is not None or self.detail_pack is not None) if tab == 0 else (self.pack_table.currentRow() >= 0 if tab == 1 else self.request_queue.count > 0)
         self.grant_button.setEnabled(self._available("grant") and selected)
-        self.grant_button.setText("Ejecutar lista" if tab == 2 else "Añadir a la partida")
+        self._set_text(self.grant_button, 'setText', "Ejecutar lista" if tab == 2 else "Añadir a la partida")
         self.grant_quantity.setEnabled(not self.busy and tab != 2)
         self.favorite_button.setEnabled(self.detail_item is not None and not self.busy)
         self.import_image_button.setEnabled(self.detail_item is not None and not self.busy)
@@ -1148,7 +1324,7 @@ class MainWindow(QMainWindow):
         if owned_equipment:
             self.grant_button.setEnabled(False)
             self.queue_add_button.setEnabled(False)
-        self.queue_add_button.setText("Preparar pack" if self.detail_pack else "Preparar")
+        self._set_text(self.queue_add_button, 'setText', "Preparar pack" if self.detail_pack else "Preparar")
         self.contents_button.setVisible(tab == 1)
         self.contents_button.setEnabled(self.detail_pack is not None)
         self.queue_remove.setEnabled(not self.busy and self.request_queue.count > 0)
@@ -1165,19 +1341,19 @@ class MainWindow(QMainWindow):
         for key, widget in self.helper_buttons.items():
             widget.setEnabled(self._available(key))
             state = self.session.features.get(key) if self.session else None
-            widget.setText("Desactivar" if state and state.enabled else "Activar")
-            self.helper_reasons[key].setText((state.reason or "Firma detectada · validación en partida pendiente") if state else "Conecta el juego para comprobar esta función.")
+            self._set_text(widget, 'setText', "Desactivar" if state and state.enabled else "Activar")
+            self._set_text(self.helper_reasons[key], 'setText', (state.reason or "Firma detectada · validación en partida pendiente") if state else "Conecta el juego para comprobar esta función.")
         if self.session:
             feature = self.session.features.get("grant")
             inventory = self.session.features.get("inventory")
             if getattr(self.session, "require_quantity_snapshot", False) and not (inventory and inventory.available):
-                self.grant_hint.setText("Se necesita una lectura compatible del inventario para comprobar cantidades antes de añadir objetos.")
+                self._set_text(self.grant_hint, 'setText', "Se necesita una lectura compatible del inventario para comprobar cantidades antes de añadir objetos.")
             elif owned_equipment:
-                self.grant_hint.setText("Este equipo ya figura en tu inventario. No se añadirán copias; pulsa Leer cantidades para actualizar.")
+                self._set_text(self.grant_hint, 'setText', "Este equipo ya figura en tu inventario. No se añadirán copias; pulsa Leer cantidades para actualizar.")
             elif self.detail_item and self.quantity_policy.is_unique(self.detail_item.hash_id):
-                self.grant_hint.setText("Equipo protegido: una unidad. Antes de enviarlo se vuelve a comprobar si ya está presente.")
+                self._set_text(self.grant_hint, 'setText', "Equipo protegido: una unidad. Antes de enviarlo se vuelve a comprobar si ya está presente.")
             else:
-                self.grant_hint.setText("En packs, el equipo recibe una unidad y se omite si ya está presente; los recursos mantienen la cantidad indicada." if feature and feature.available else (feature.reason if feature else "Función pendiente de comprobación."))
+                self._set_text(self.grant_hint, 'setText', "En packs, el equipo recibe una unidad y se omite si ya está presente; los recursos mantienen la cantidad indicada." if feature and feature.available else (feature.reason if feature else "Función pendiente de comprobación."))
 
     def _run(self, name, operation, callback=None):
         if self.busy:
@@ -1196,15 +1372,15 @@ class MainWindow(QMainWindow):
         if total:
             self.progress.setRange(0, total)
             self.progress.setValue(done)
-        self.progress.setFormat(text + (" · %p%" if total else ""))
-        self.statusBar().showMessage(text)
+        self._set_text(self.progress, 'setFormat', text + (" · %p%" if total else ""))
+        self._set_text(self.statusBar(), 'showMessage', text)
 
     def _settled(self, success=True):
         self.worker.running = False
         self.busy = False
         self.progress.setRange(0, 100)
         self.progress.setValue(100 if success else 0)
-        self.progress.setFormat("Preparado" if success else "Operación no completada")
+        self._set_text(self.progress, 'setFormat', "Preparado" if success else "Operación no completada")
         self._refresh_controls()
         self._fill_features()
         if self.disconnect_pending:
@@ -1238,9 +1414,9 @@ class MainWindow(QMainWindow):
         self._activity(f"{name}: {text}")
         if self.session and getattr(getattr(self.session, "memory", None), "tainted", False):
             self._clear_inventory()
-            self.grant_hint.setText("La operación no terminó a tiempo. La sesión queda bloqueada hasta reiniciar el juego.")
+            self._set_text(self.grant_hint, 'setText', "La operación no terminó a tiempo. La sesión queda bloqueada hasta reiniciar el juego.")
         if not self.close_pending:
-            QMessageBox.warning(self, "No se pudo completar la operación", text)
+            QMessageBox.warning(self, self.t("No se pudo completar la operación"), self.t(text))
 
     def attach_game(self):
         pid = self.processes.currentData()
@@ -1259,12 +1435,12 @@ class MainWindow(QMainWindow):
             return session
         def done(session):
             self.session = session
-            self.side_status.setText("JUEGO CONECTADO")
+            self._set_text(self.side_status, 'setText', "JUEGO CONECTADO")
             memory = session.memory
             self.process_fingerprint = getattr(session, "executable_identity", {})
-            self.connection_status.setText(f"Conectado a {memory.name} · PID {memory.pid}. Revisa las funciones detectadas en Compatibilidad.")
+            self._set_text(self.connection_status, 'setText', f"Conectado a {memory.name} · PID {memory.pid}. Revisa las funciones detectadas en Compatibilidad.")
             fingerprint = self.process_fingerprint
-            self.process_details.setPlainText(f"Proceso: {memory.name}\nPID: {memory.pid}\nRuta: {memory.path}\nVersión declarada: {fingerprint.get('version', 'No declarada')}\nSHA-256: {fingerprint.get('sha256') or 'No disponible'}\nPerfil: firmas de la tabla fuente; validación en partida pendiente.")
+            self._set_text(self.process_details, 'setPlainText', f"Proceso: {memory.name}\nPID: {memory.pid}\nRuta: {memory.path}\nVersión declarada: {fingerprint.get('version', 'No declarada')}\nSHA-256: {fingerprint.get('sha256') or 'No disponible'}\nPerfil: firmas de la tabla fuente; validación en partida pendiente.")
             self._fill_features()
             self._activity("Conexión establecida. Ninguna ayuda se ha activado automáticamente.")
             if self.show_quantities.isChecked():
@@ -1282,8 +1458,8 @@ class MainWindow(QMainWindow):
         def done(result):
             self.session = None
             self._clear_inventory()
-            self.side_status.setText("SIN CONEXIÓN")
-            self.connection_status.setText("Desconectado. Puedes volver a adjuntar el juego.")
+            self._set_text(self.side_status, 'setText', "SIN CONEXIÓN")
+            self._set_text(self.connection_status, 'setText', "Desconectado. Puedes volver a adjuntar el juego.")
             self._fill_features()
             if isinstance(result, dict) and (result.get("pending") or result.get("tainted")):
                 self._activity("Desconectado. Quedó una operación sin confirmar; reinicia el juego antes de volver a conectarlo.")
@@ -1303,7 +1479,7 @@ class MainWindow(QMainWindow):
         for row, feature in enumerate(features):
             status = "Activa" if feature.enabled else ("Firma detectada" if feature.available else "No disponible")
             for column, text in enumerate([feature.title, status, feature.reason or "Validación en partida pendiente"]):
-                self.feature_table.setItem(row, column, QTableWidgetItem(text))
+                self.feature_table.setItem(row, column, self._cell(text))
 
     def grant_selection(self):
         if self.catalog_tabs.currentIndex() == 2:
@@ -1329,7 +1505,7 @@ class MainWindow(QMainWindow):
             hashes, title = list(selected.hashes), selected.name
         quantity = self.grant_quantity.value()
         terms = "El equipo identificado recibe una unidad y se omite si ya está presente. Los recursos u objetos sin esa protección reciben la cantidad indicada."
-        answer = QMessageBox.question(self, "Revisar solicitud", f"{title}\n\nSe revisarán {len(hashes)} objetos distintos. Cantidad seleccionada: {self._format_quantity(quantity)}.\n{terms}\n\n¿Aplicar a la partida conectada?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
+        answer = QMessageBox.question(self, self.t("Revisar solicitud"), self.t(f"{title}\n\nSe revisarán {len(hashes)} objetos distintos. Cantidad seleccionada: {self._format_quantity(quantity)}.\n{terms}\n\n¿Aplicar a la partida conectada?"), QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
         if answer != QMessageBox.StandardButton.Yes:
             return
         def done(result):
@@ -1367,10 +1543,10 @@ class MainWindow(QMainWindow):
         self.inventory_totals = {}
         self.inventory_identity = None
         self.inventory_table.setRowCount(0)
-        self.inventory_selected.setText("Actualiza el inventario desde la partida.")
+        self._set_text(self.inventory_selected, 'setText', "Actualiza el inventario desde la partida.")
         self.resource_statuses = []
         self.resource_table.setRowCount(0)
-        self.resource_hint.setText("Actualiza el inventario para comprobar los recursos. Ausente no significa cantidad cero.")
+        self._set_text(self.resource_hint, 'setText', "Actualiza el inventario para comprobar los recursos. Ausente no significa cantidad cero.")
         self._update_catalog_quantities()
 
     def load_inventory(self):
@@ -1386,11 +1562,11 @@ class MainWindow(QMainWindow):
         self.inventory_totals = {}
         for item in items:
             self.inventory_totals[item.hash_id] = self.inventory_totals.get(item.hash_id, 0) + item.quantity
-        self.inventory_selected.setText("Selecciona un objeto.")
+        self._set_text(self.inventory_selected, 'setText', "Selecciona un objeto.")
         self.inventory_table.setRowCount(len(items))
         for row, item in enumerate(items):
             for column, text in enumerate([item.name, item.quantity, f"{int(item.hash_id):016X}"]):
-                self.inventory_table.setItem(row, column, QTableWidgetItem(str(text)))
+                self.inventory_table.setItem(row, column, self._cell(str(text)))
         self._activity(f"Inventario actualizado: {len(items)} registros.")
         if self.session:
             self._resources_loaded(self.resource_assistant.inspect(self.session, items))
@@ -1404,11 +1580,11 @@ class MainWindow(QMainWindow):
         for row, status in enumerate(statuses):
             values = [status.rule.name, status.rule.group, str(status.quantity) if status.quantity is not None else "No localizado", status.state, status.detail]
             for column, text in enumerate(values):
-                cell = QTableWidgetItem(text)
-                cell.setToolTip(status.detail)
+                cell = self._cell(text)
+                self._set_text(cell, 'setToolTip', status.detail)
                 self.resource_table.setItem(row, column, cell)
         missing = sum(status.can_initialize for status in statuses)
-        self.resource_hint.setText(f"{missing} recursos básicos sin registro pueden recibir una unidad. Los recursos de contenido, eventos y progreso requieren comprobación aparte.")
+        self._set_text(self.resource_hint, 'setText', f"{missing} recursos básicos sin registro pueden recibir una unidad. Los recursos de contenido, eventos y progreso requieren comprobación aparte.")
 
     def repair_resources(self):
         if not (self._available("inventory") and self._available("grant")):
@@ -1430,10 +1606,10 @@ class MainWindow(QMainWindow):
         if 0 <= row < len(self.inventory):
             item = self.inventory[row]
             self.new_quantity.setMaximum(self.quantity_policy.limit(item.hash_id))
-            self.new_quantity.setToolTip(self.quantity_policy.rule(item.hash_id).reason)
-            self.inventory_selected.setText(item.name)
+            self._set_text(self.new_quantity, 'setToolTip', self.quantity_policy.rule(item.hash_id).reason)
+            self._set_text(self.inventory_selected, 'setText', item.name)
             if item.hash_id == RATIONS_HASH:
-                self.inventory_selected.setText("Raciones: tratamiento especial; usa el pack del catálogo. No se edita directamente.")
+                self._set_text(self.inventory_selected, 'setText', "Raciones: tratamiento especial; usa el pack del catálogo. No se edita directamente.")
             self.new_quantity.setValue(min(item.quantity, self.new_quantity.maximum()))
         self._refresh_controls()
 
@@ -1444,7 +1620,7 @@ class MainWindow(QMainWindow):
         item, value = self.inventory[row], self.new_quantity.value()
         if item.hash_id == RATIONS_HASH:
             return
-        if value == 0 and QMessageBox.question(self, "Retirar objeto", f"¿Cambiar a cero la cantidad de {item.name}? Esta modificación puede quedar guardada en tu partida.", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+        if value == 0 and QMessageBox.question(self, self.t("Retirar objeto"), self.t(f"¿Cambiar a cero la cantidad de {item.name}? Esta modificación puede quedar guardada en tu partida."), QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
             return
         def done(updated):
             self._clear_inventory()
@@ -1497,16 +1673,16 @@ class MainWindow(QMainWindow):
         return {"application": "Valhalla Companion", "version": __version__, "catalog_items": len(self.catalog.items), "catalog_packs": len(self.catalog.packs), "source": self.catalog.source, "process": process, "features": features, "activity": self.activity.toPlainText(), "gameplay_validated": False}
 
     def export_diagnostics(self):
-        target, _ = QFileDialog.getSaveFileName(self, "Guardar diagnóstico", str(user_dir() / "diagnostico.json"), "JSON (*.json)")
+        target, _ = QFileDialog.getSaveFileName(self, self.t("Guardar diagnóstico"), str(user_dir() / "diagnostico.json"), self.t("JSON (*.json)"), options=QFileDialog.Option.DontUseNativeDialog)
         if target:
             try:
                 Path(target).write_text(json.dumps(self.diagnostic_data(), ensure_ascii=False, indent=2), encoding="utf-8")
                 self._activity("Diagnóstico guardado.")
             except OSError as exc:
-                QMessageBox.warning(self, "No se pudo guardar", str(exc))
+                QMessageBox.warning(self, self.t("No se pudo guardar"), self.t(str(exc)))
 
     def about(self):
-        QMessageBox.about(self, "Acerca de Valhalla Companion", f"Valhalla Companion {__version__}\nAplicación independiente de Cheat Engine.\n\nCatálogo y referencias: AC Valhalla Inventory Editor; budabum y los colaboradores acreditados en la tabla fuente.\n\nGalería con ilustraciones vectoriales originales, favoritos e imágenes locales. Controles con QtAwesome / Font Awesome. Créditos y licencias en THIRD_PARTY.md.\n\nInterfaz con navegación por teclado, búsqueda y tamaño de texto ajustable.\n\nEsta edición necesita validación dentro de la compilación concreta del juego.")
+        QMessageBox.about(self, self.t("Acerca de Valhalla Companion"), self.t(f"Valhalla Companion {__version__}\nAplicación independiente de Cheat Engine.\n\nCatálogo y referencias: AC Valhalla Inventory Editor; budabum y los colaboradores acreditados en la tabla fuente.\n\nGalería con ilustraciones vectoriales originales, favoritos e imágenes locales. Controles con QtAwesome / Font Awesome. Créditos y licencias en THIRD_PARTY.md.\n\nInterfaz con navegación por teclado, búsqueda y tamaño de texto ajustable.\n\nEsta edición necesita validación dentro de la compilación concreta del juego."))
 
     def closeEvent(self, event):
         if self.busy:

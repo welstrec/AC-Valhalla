@@ -13,21 +13,26 @@ from PySide6.QtCore import QAbstractListModel, QModelIndex, QPointF, QRectF, QSi
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QImageReader, QPainter, QPen, QPixmap, QPolygonF, QTextLayout
 from PySide6.QtWidgets import QAbstractItemView, QListView, QStyle, QStyledItemDelegate, QVBoxLayout, QWidget
 
+from .i18n import Translator
+
 
 ITEM_ROLE = int(Qt.ItemDataRole.UserRole) + 1
 CARD_SIZE = QSize(176, 216)
 
 
-def _category(item) -> str:
+def _category(item, translator=None) -> str:
     categories = getattr(item, "categories", ())
-    return " · ".join(categories) if categories else "Sin categoría"
+    if translator is None:
+        return " · ".join(categories) if categories else "Sin categoría"
+    return " · ".join(translator.category(category) for category in categories) if categories else translator.text("Sin categoría")
 
 
 class GalleryModel(QAbstractListModel):
     """A light model which exposes meaningful text to assistive technologies."""
-    def __init__(self, library, parent=None):
+    def __init__(self, library, parent=None, translator=None):
         super().__init__(parent)
         self.library = library
+        self.translator = translator if translator is not None else Translator("es")
         self.items = []
         self.quantities = None
         self._rows = {}
@@ -44,11 +49,13 @@ class GalleryModel(QAbstractListModel):
         if role == Qt.ItemDataRole.DisplayRole:
             return item.name
         if role in (Qt.ItemDataRole.ToolTipRole, Qt.ItemDataRole.AccessibleTextRole):
-            favorite = ", favorito" if self.library.is_favorite(item.hash_id) else ""
+            favorite = self.translator.text(", favorito") if self.library.is_favorite(item.hash_id) else ""
             quantity = self.quantity_text(item)
-            return f"{item.name}, {_category(item)}{favorite}. {quantity} Identificador {item.hash_id}. Abre la ficha para revisar su imagen y sus acciones."
+            return self.translator.text("{name}, {category}{favorite}. {quantity} Identificador {hash_id}. Abre la ficha para revisar su imagen y sus acciones.",
+                name=item.name, category=_category(item, self.translator), favorite=favorite,
+                quantity=quantity, hash_id=item.hash_id)
         if role == Qt.ItemDataRole.AccessibleDescriptionRole:
-            return "Selecciona con las flechas y pulsa Intro para abrir la ficha. Las ilustraciones semánticas no muestran necesariamente el aspecto real del objeto."
+            return self.translator.text("Selecciona con las flechas y pulsa Intro para abrir la ficha. Las ilustraciones semánticas no muestran necesariamente el aspecto real del objeto.")
         return None
 
     def flags(self, index):
@@ -73,14 +80,18 @@ class GalleryModel(QAbstractListModel):
         if self.quantities is None:
             return ""
         value = self.quantities.get(int(item.hash_id, 16))
-        return ("En partida: " + f"{value:,}".replace(",", ".")) if value is not None else "Sin registro en la lectura"
+        if value is None:
+            return self.translator.text("Sin registro en la lectura")
+        number = f"{value:,}" if self.translator.language == "en" else f"{value:,}".replace(",", ".")
+        return self.translator.text("En partida: {quantity}", quantity=number)
 
 
 class _CardDelegate(QStyledItemDelegate):
-    def __init__(self, icon_provider, library, parent=None):
+    def __init__(self, icon_provider, library, parent=None, translator=None):
         super().__init__(parent)
         self.icon_provider = icon_provider
         self.library = library
+        self.translator = translator if translator is not None else Translator("es")
         self._image_cache = OrderedDict()
         self.cache_limit = 128
 
@@ -212,7 +223,7 @@ class _CardDelegate(QStyledItemDelegate):
         metrics = QFontMetrics(category_font)
         painter.drawText(QRectF(card.left() + 11, card.top() + 164, card.width() - 22, 17),
                          Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                         metrics.elidedText(index.model().quantity_text(item) or _category(item), Qt.TextElideMode.ElideRight, int(card.width() - 22)))
+                         metrics.elidedText(index.model().quantity_text(item) or _category(item, self.translator), Qt.TextElideMode.ElideRight, int(card.width() - 22)))
 
         badge_font = QFont(option.font)
         badge_font.setPixelSize(10)
@@ -220,7 +231,7 @@ class _CardDelegate(QStyledItemDelegate):
         painter.setPen(QColor("#99d9ca" if custom else "#c5b28d"))
         painter.drawText(QRectF(card.left() + 11, card.bottom() - 19, card.width() - 22, 14),
                          Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                         "Tu imagen" if custom else "Ilustración semántica")
+                         self.translator.text("Tu imagen" if custom else "Ilustración semántica"))
         painter.restore()
 
 
@@ -228,15 +239,13 @@ class GalleryView(QWidget):
     selection_changed = Signal(object)
     activated = Signal(object)
 
-    def __init__(self, icon_provider, library, parent=None):
+    def __init__(self, icon_provider, library, parent=None, translator=None):
         super().__init__(parent)
         self.icon_provider, self.library = icon_provider, library
-        self.setAccessibleName("Galería de objetos")
+        self.translator = translator if translator is not None else Translator("es")
         self._resetting = False
-        self.model = GalleryModel(library, self)
+        self.model = GalleryModel(library, self, translator=self.translator)
         self.view = QListView(self)
-        self.view.setAccessibleName("Tarjetas de objetos del catálogo")
-        self.view.setAccessibleDescription("Usa las flechas para seleccionar un objeto y pulsa Intro para abrir su ficha. Las miniaturas marcadas como ilustración son interpretaciones del objeto.")
         self.view.setViewMode(QListView.ViewMode.IconMode)
         self.view.setResizeMode(QListView.ResizeMode.Adjust)
         self.view.setMovement(QListView.Movement.Static)
@@ -254,13 +263,21 @@ class GalleryView(QWidget):
         self.view.setMouseTracking(True)
         self.view.setStyleSheet("QListView { background: #111c29; border: 1px solid #344b5e; border-radius: 6px; outline: none; } QListView:focus { border: 2px solid #6de0c6; }")
         self.view.setModel(self.model)
-        self.delegate = _CardDelegate(icon_provider, library, self.view)
+        self.delegate = _CardDelegate(icon_provider, library, self.view, translator=self.translator)
         self.view.setItemDelegate(self.delegate)
         self.view.selectionModel().currentChanged.connect(self._current_changed)
         self.view.activated.connect(self._activated)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.view)
+        self.retranslate()
+
+    def retranslate(self):
+        self.setAccessibleName(self.translator.text("Galería de objetos"))
+        self.view.setAccessibleName(self.translator.text("Tarjetas de objetos del catálogo"))
+        self.view.setAccessibleDescription(self.translator.text("Usa las flechas para seleccionar un objeto y pulsa Intro para abrir su ficha. Las miniaturas marcadas como ilustración son interpretaciones del objeto."))
+        self.model.refresh()
+        self.view.viewport().update()
 
     def set_items(self, items):
         self._resetting = True

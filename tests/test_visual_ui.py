@@ -124,7 +124,7 @@ class VisualUITests(unittest.TestCase):
         self.select(target)
         kind = self.window.icon_provider.describe(target).kind
         self.window.kind_filter.setCurrentIndex(self.window.kind_filter.findData(kind))
-        self.window.category.setCurrentText(target.categories[0])
+        self.window.category.setCurrentIndex(self.window.category.findData(target.categories[0]))
         self.filter("frostbita")
         self.assertEqual(self.window.display_items, [target])
         self.assertEqual(self.window.gallery.count(), 1)

@@ -30,6 +30,9 @@ def self_test() -> dict:
     from PIL import Image
     from valhalla.library import UserLibrary
     from valhalla.quantities import QuantityPolicy, MAX_STACK_QUANTITY
+    from valhalla.i18n import Translator, SUPPORTED_LANGUAGES
+    from valhalla.qt_language import install_qt_language
+    from PySide6.QtWidgets import QMessageBox
 
     windows_identity = configure_windows_identity()
     app = QApplication.instance() or QApplication(["ValhallaCompanion", "--self-test"])
@@ -76,6 +79,21 @@ def self_test() -> dict:
     for item in illustrations.values():
         assert not icons.pixmap(item, 64).isNull()
     assert not qtawesome.icon("fa5s.star").pixmap(32, 32).isNull()
+    english = Translator("en")
+    spanish = Translator("es")
+    assert english.text("Sin registro") == "No record"
+    assert english.text("En partida: {quantity}", quantity="100,000") == "In game: 100,000"
+    assert spanish.text("Sin registro") == "Sin registro"
+    assert english.category("ARMOR") == "Armor" and spanish.category("ARMOR") == "Armaduras"
+    assert len(english.translations) > 200
+    for language, expected_yes in (("en", "Yes"), ("es", "Sí")):
+        install_qt_language(app, language)
+        dialog = QMessageBox()
+        dialog.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        assert dialog.button(QMessageBox.StandardButton.Yes).text().replace("&", "") == expected_yes
+        dialog.close()
+        dialog.deleteLater()
+    install_qt_language(app, "en")
     with tempfile.TemporaryDirectory(prefix="valhalla-self-test-") as temporary:
         folder = Path(temporary)
         library = UserLibrary(folder / "library")
@@ -98,6 +116,8 @@ def self_test() -> dict:
             "windows_app_user_model_id": APP_USER_MODEL_ID if windows_identity else None,
             "equipment_duplicate_protection_checked": True, "stack_quantity_input_maximum": MAX_STACK_QUANTITY,
             "local_image_formats_checked": ["PNG", "JPEG", "WebP"],
+            "languages_available": list(SUPPORTED_LANGUAGES),
+            "translation_entries_checked": len(english.translations), "qt_standard_buttons_checked": True,
             "navigation_roots": navigation_roots, "pack_paths_checked": len(catalog.pack_paths),
             "catalog_sha256": hashlib.sha256(resource_path("data/catalog.json").read_bytes()).hexdigest(),
             "attached_to_game": False, "gameplay_validated": False}
@@ -112,6 +132,7 @@ def main():
     parser.add_argument("--preview-query", default="")
     parser.add_argument("--preview-node", default="")
     parser.add_argument("--preview-view", choices=("list", "cards"), default="list")
+    parser.add_argument("--language", choices=("en", "es"), help="Interface language / Idioma de la interfaz")
     options = parser.parse_args()
     if options.self_test or options.self_test_output:
         try:
@@ -136,21 +157,28 @@ def main():
     from valhalla.catalog import Catalog
     from valhalla.theme import apply_theme
     from valhalla.ui import MainWindow
+    from valhalla.i18n import Translator, resolve_language
+    from valhalla.qt_language import install_qt_language
 
     configure_windows_identity()
     app = QApplication(sys.argv[:1])
     app.setApplicationName("Valhalla Companion")
     app.setOrganizationName("ValhallaCompanion")
     app.setApplicationVersion(__version__)
-    QLocale.setDefault(QLocale("es_CO"))
+    language = resolve_language(options.language)
+    translator = Translator(language)
+    QLocale.setDefault(QLocale("es_CO" if language == "es" else "en_US"))
+    install_qt_language(app, language)
     app.setWindowIcon(application_icon())
     apply_theme(app)
     try:
-        window = MainWindow(Catalog.load(resource_path("data/catalog.json")))
+        window = MainWindow(Catalog.load(resource_path("data/catalog.json")), language=language)
         install_window_icon(window)
     except Exception as exc:
         logging.exception("Startup failed")
-        QMessageBox.critical(None, "No se pudo abrir Valhalla Companion", f"{exc}\n\nConsulta el registro en {user_dir()}.")
+        QMessageBox.critical(None, translator.text("No se pudo abrir Valhalla Companion"),
+                             translator.text("{error}\n\nConsulta el registro en {path}.",
+                                             error=translator.message(str(exc)), path=user_dir()))
         return 1
     window.show()
     if options.screenshot:
@@ -158,7 +186,7 @@ def main():
             window.navigate(1)
             if options.preview_node:
                 if not window.navigator.select_key(options.preview_node):
-                    raise ValueError("Carpeta de vista previa desconocida: " + options.preview_node)
+                    raise ValueError(translator.text("Carpeta de vista previa desconocida: {node}", node=options.preview_node))
             window.search.setText(options.preview_query)
             window.search_timer.stop()
             window._filter_catalog()

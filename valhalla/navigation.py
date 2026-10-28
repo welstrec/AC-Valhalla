@@ -10,8 +10,14 @@ from PySide6.QtCore import Qt, Signal, QSize
 from PySide6.QtWidgets import QAbstractItemView, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget
 import qtawesome
 
+from .i18n import Translator
+from .icons import LABELS
+
 
 SCOPE_ROLE = int(Qt.ItemDataRole.UserRole) + 1
+COUNT_ROLE = SCOPE_ROLE + 1
+EXPLANATION_ROLE = SCOPE_ROLE + 2
+VALUES_ROLE = SCOPE_ROLE + 3
 
 
 @dataclass(frozen=True)
@@ -34,10 +40,11 @@ class CatalogNavigator(QWidget):
 
     scope_changed = Signal(object)
 
-    def __init__(self, catalog, icon_provider, parent=None):
+    def __init__(self, catalog, icon_provider, parent=None, translator=None):
         super().__init__(parent)
         self.catalog = catalog
         self.icon_provider = icon_provider
+        self.translator = translator if translator is not None else Translator("es")
         self._nodes: dict[str, QTreeWidgetItem] = {}
         self._folder_paths: dict[tuple[str, ...], QTreeWidgetItem] = {}
         layout = QVBoxLayout(self)
@@ -60,34 +67,60 @@ class CatalogNavigator(QWidget):
             QTreeWidget#catalogTree::item:selected { background: #285c68; color: #ffffff; }
             QTreeWidget#catalogTree::item:focus { border: 1px solid #6de0c6; }
         """)
-        self.tree.setAccessibleName("Categorías del catálogo")
-        self.tree.setAccessibleDescription("Usa las flechas para abrir categorías y seleccionar una lista de packs u objetos. No se modifica la partida al navegar.")
         layout.addWidget(self.tree)
         self._folder_icon = qtawesome.icon("fa5s.folder", color="#d4ae70")
         self._pack_icon = qtawesome.icon("fa5s.box-open", color="#bcd5e4")
         self._build()
+        self.retranslate()
         self.tree.setCurrentItem(self._nodes["all"])
         self.tree.currentItemChanged.connect(self._changed)
 
-    def _node(self, parent, scope, count=None, icon=None, explanation=""):
+    def _node(self, parent, scope, count=None, icon=None, explanation="", values=None):
         node = QTreeWidgetItem(parent if parent is not None else self.tree)
-        title = re.sub(r"\s*\((?:\d+\s*|Lots\s+Of\s+)Pcs\)\s*$", "", scope.title, flags=re.IGNORECASE)
-        text = title if count is None else f"{title} ({count})"
-        node.setText(0, text)
         node.setData(0, SCOPE_ROLE, scope)
+        node.setData(0, COUNT_ROLE, count)
+        node.setData(0, EXPLANATION_ROLE, explanation)
+        node.setData(0, VALUES_ROLE, values or {})
+        node.setIcon(0, icon or self._folder_icon)
+        self._nodes[scope.key] = node
+        self._render_node(node)
+        return node
+
+    def _display_title(self, scope):
+        if scope.pack_id:
+            return scope.title
+        if scope.kind:
+            return self.translator.text(LABELS.get(scope.kind, scope.title))
+        return self.translator.category(scope.title)
+
+    def _render_node(self, node):
+        scope = node.data(0, SCOPE_ROLE)
+        title = self._display_title(scope)
+        title = re.sub(r"\s*\((?:\d+\s*|Lots\s+Of\s+)Pcs\)\s*$", "", title, flags=re.IGNORECASE)
+        count = node.data(0, COUNT_ROLE)
+        text = title if count is None else f"{title} ({count})"
+        values = dict(node.data(0, VALUES_ROLE) or {})
+        values.setdefault("title", self._display_title(scope))
+        explanation = self.translator.text(node.data(0, EXPLANATION_ROLE) or "", **values)
+        node.setText(0, text)
         node.setData(0, Qt.ItemDataRole.AccessibleTextRole, text)
         node.setData(0, Qt.ItemDataRole.AccessibleDescriptionRole, explanation)
         node.setToolTip(0, explanation or text)
-        node.setIcon(0, icon or self._folder_icon)
-        self._nodes[scope.key] = node
-        return node
+
+    def retranslate(self):
+        """Refresh presentation only: scope keys, membership and expansion stay intact."""
+        self.tree.setAccessibleName(self.translator.text("Categorías del catálogo"))
+        self.tree.setAccessibleDescription(self.translator.text("Usa las flechas para abrir categorías y seleccionar una lista de packs u objetos. No se modifica la partida al navegar."))
+        for node in self._nodes.values():
+            self._render_node(node)
 
     def _build(self):
         all_hashes = frozenset(self.catalog.by_hash)
         all_packs = frozenset(self.catalog.by_pack)
         self._node(None, CatalogScope("all", "Todo el catálogo"), len(all_hashes),
                    qtawesome.icon("fa5s.list-ul", color="#bcd5e4"),
-                   f"{len(all_hashes)} objetos distintos y {len(all_packs)} packs. Quita el límite de carpeta.")
+                   "{items} objetos distintos y {packs} packs. Quita el límite de carpeta.",
+                   {"items": len(all_hashes), "packs": len(all_packs)})
         packs_root = self._node(None, CatalogScope("packs", "Packs", frozenset(), frozenset(), "packs"),
                                 len(all_packs), explanation="Packs organizados como en la tabla original. Abre un pack para ver sus objetos.")
         self._folder_paths[()] = packs_root
@@ -114,18 +147,17 @@ class CatalogNavigator(QWidget):
             scope = CatalogScope(f"pack:{pack.id}", pack.name, frozenset(pack.hashes),
                                  frozenset({pack.id}), "items", pack_id=pack.id)
             self._node(self._folder_paths[parent_path], scope, len(pack.hashes), self._pack_icon,
-                       f"{pack.name}. {len(pack.hashes)} objetos distintos. Cantidad predeterminada por objeto: {pack.quantity}. Selecciona para ver su contenido.")
+                       "{name}. {items} objetos distintos. Cantidad predeterminada por objeto: {quantity}. Selecciona para ver su contenido.",
+                       {"name": pack.name, "items": len(pack.hashes), "quantity": pack.quantity})
         for path, node in self._folder_paths.items():
             previous = node.data(0, SCOPE_ROLE)
             scope = CatalogScope(previous.key, previous.title, frozenset(folder_hashes[path]),
                                  frozenset(folder_members[path]), "packs")
             node.setData(0, SCOPE_ROLE, scope)
-            text = f"{scope.title} ({len(scope.pack_ids)})"
-            node.setText(0, text)
-            node.setData(0, Qt.ItemDataRole.AccessibleTextRole, text)
-            description = f"{scope.title}: {len(scope.pack_ids)} packs y {len(scope.hashes)} objetos distintos."
-            node.setToolTip(0, description)
-            node.setData(0, Qt.ItemDataRole.AccessibleDescriptionRole, description)
+            node.setData(0, COUNT_ROLE, len(scope.pack_ids))
+            node.setData(0, EXPLANATION_ROLE, "{title}: {packs} packs y {items} objetos distintos.")
+            node.setData(0, VALUES_ROLE, {"packs": len(scope.pack_ids), "items": len(scope.hashes)})
+            self._render_node(node)
         packs_root.setExpanded(True)
 
         membership = defaultdict(set)
@@ -137,7 +169,7 @@ class CatalogNavigator(QWidget):
         for item in self.catalog.items:
             description = self.icon_provider.describe(item)
             groups[description.kind].append(item)
-            labels[description.kind] = description.label
+            labels[description.kind] = LABELS.get(description.kind, description.label)
         type_root = self._node(None, CatalogScope("items", "Objetos por tipo", all_hashes, all_packs, "items"), len(all_hashes))
         for kind in sorted(groups, key=lambda value: labels[value].casefold()):
             items = groups[kind]
@@ -145,7 +177,8 @@ class CatalogNavigator(QWidget):
             pack_ids = frozenset(pack_id for hash_id in hashes for pack_id in membership[hash_id])
             icon = self.icon_provider.icon(items[0], 32) if hasattr(self.icon_provider, "icon") else self._folder_icon
             self._node(type_root, CatalogScope(f"kind:{kind}", labels[kind], hashes, pack_ids, "items", kind),
-                       len(hashes), icon, f"{labels[kind]}: {len(hashes)} objetos. El tipo se infiere del nombre y contexto; no confirma atributos dentro del juego.")
+                       len(hashes), icon, "{title}: {items} objetos. El tipo se infiere del nombre y contexto; no confirma atributos dentro del juego.",
+                       {"items": len(hashes)})
         category_root = self._node(None, CatalogScope("categories", "Objetos por categoría", all_hashes, all_packs, "items"), len(all_hashes))
         for category in self.catalog.categories:
             hashes = frozenset(item.hash_id for item in self.catalog.items if category in item.categories)
@@ -184,6 +217,6 @@ class CatalogNavigator(QWidget):
         node = self.tree.currentItem()
         names = []
         while node is not None:
-            names.append(node.data(0, SCOPE_ROLE).title)
+            names.append(self._display_title(node.data(0, SCOPE_ROLE)))
             node = node.parent()
         return " › ".join(reversed(names))

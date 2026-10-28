@@ -14,6 +14,7 @@ from PySide6.QtWidgets import QApplication, QWidget
 from valhalla.catalog import Catalog, Item
 from valhalla.gallery import GalleryView, ITEM_ROLE
 from valhalla.theme import apply_theme
+from valhalla.i18n import Translator
 
 
 class FakeProvider:
@@ -151,6 +152,32 @@ class GalleryTests(unittest.TestCase):
         self.assertEqual(self.gallery.view.gridSize().height(), 324)
         QTest.qWait(10)
         self.assertFalse(self.gallery.grab().isNull())
+
+    def test_language_switch_translates_accessibility_and_counts_without_resetting_selection(self):
+        self.gallery.close()
+        translator = Translator("en")
+        self.gallery = GalleryView(self.provider, self.library, translator=translator)
+        item, absent = self.catalog.items[:2]
+        self.library.favorites.add(item.hash_id)
+        self.gallery.set_items([item, absent])
+        self.gallery.set_quantities({int(item.hash_id, 16): 100000})
+        self.gallery.select_hash(item.hash_id)
+        selection_changes = QSignalSpy(self.gallery.selection_changed)
+        index = self.gallery.model.index(0)
+        text = index.data(Qt.ItemDataRole.AccessibleTextRole)
+        self.assertEqual(self.gallery.accessibleName(), "Item gallery")
+        self.assertIn(", favorite", text)
+        self.assertIn("In game: 100,000", text)
+        self.assertIn(item.name, text)
+        self.assertIn(item.hash_id, text)
+        self.assertEqual(self.gallery.model.quantity_text(absent), "No record in this reading")
+        translator.set_language("es")
+        self.gallery.retranslate()
+        self.assertEqual(self.gallery.accessibleName(), "Galería de objetos")
+        self.assertIn("En partida: 100.000", index.data(Qt.ItemDataRole.AccessibleTextRole))
+        self.assertEqual(self.gallery.selected_item(), item)
+        self.assertEqual(self.gallery.model.quantities[int(item.hash_id, 16)], 100000)
+        self.assertEqual(selection_changes.count(), 0)
 
 
 if __name__ == "__main__":

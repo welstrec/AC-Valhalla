@@ -1,4 +1,8 @@
-**Valhalla Companion 0.4.0 — cantidades, protección de equipo e icono de Windows**
+**Valhalla Companion 0.5.0 — interfaz bilingüe, cantidades y protección de equipo**
+
+[English](VALIDATION.md) | **Español**
+
+La interfaz ofrece inglés y español mediante el selector Language / Idioma y recuerda la preferencia local. Los controles, categorías, tipos, ayudas y mensajes propios de la aplicación se presentan en el idioma elegido. Los nombres de objetos y packs conservan la referencia original y sus identificadores permanecen iguales. La traducción de la interfaz no se presenta como una localización oficial de todos los nombres internos del juego.
 
 Esta entrega muestra las cantidades de la última lectura de inventario en listas, tarjetas, solicitudes y la ficha. La casilla Mostrar cantidades controla la presentación y la lectura automática al conectar. Se conservan la hora de lectura y la identidad de la sesión. Sin registro no se presenta como cero. Las lecturas fallidas, la desconexión y las sesiones bloqueadas invalidan los valores. Las ediciones se vuelven a leer. No se ejecuta un sondeo continuo del inventario.
 
@@ -8,6 +12,6 @@ Se eliminan los topes arbitrarios de los controles y de la lista de solicitudes.
 
 El EXE integra el icono original en tamaños 16, 32, 48, 64, 128 y 256. La ventana recibe ese icono explícitamente; Windows recibe una identidad estable de aplicación antes de crear la ventana. La compilación añade versión y producto y verifica los recursos de icono del EXE frente al ICO original. No se modifican los iconos, accesos directos ni la caché global de Windows del usuario.
 
-Las 196 pruebas de la suite pasaron. Usan sesiones inertes, datos sintéticos y procesos auxiliares propios. Verifican cantidades grandes, límites comprobados simulados, sumas que desbordarían el rango, equipo ya presente, cantidad efectiva de packs mixtos, lecturas fallidas o de otra instancia, campos desconocidos y cero presente. La compilación realiza también el autodiagnóstico del propio EXE, verifica el icono y captura su interfaz. La prueba con una partida real y su compilación concreta de Valhalla sigue pendiente.
+Las pruebas automatizadas usan sesiones inertes, datos sintéticos y procesos auxiliares propios. La verificación de idiomas cubre selección, preferencia local, formato y conservación de identificadores al traducir. Se mantienen las comprobaciones de cantidades grandes, límites comprobados simulados, sumas que desbordarían el rango, equipo ya presente, cantidad efectiva de packs mixtos, lecturas fallidas o de otra instancia, campos desconocidos y cero presente. La compilación realiza también el autodiagnóstico del propio EXE, verifica el icono y captura su interfaz en ambos idiomas. La prueba con una partida real y su compilación concreta de Valhalla sigue pendiente.
 
-El tamaño, SHA-256 y resultados del binario están en `dist/release.json`. El EXE de esta entrega se llama `ValhallaCompanion-0.4.0.exe`. Los paquetes generados se distribuyen como entregas descargables y no se incluyen en el historial del código.
+El tamaño, SHA-256 y resultados del binario están en `dist/release.json`. El EXE de esta entrega se llama `ValhallaCompanion-0.5.0.exe`. Los paquetes generados se distribuyen como entregas descargables y no se incluyen en el historial del código.
