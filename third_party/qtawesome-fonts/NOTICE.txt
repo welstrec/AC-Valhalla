@@ -1,0 +1,111 @@
+QtAwesome 1.4.2 font redistribution notices
+Recorded: 2026-10-27
+
+The application uses Font Awesome 5 Solid for interface controls. QtAwesome's
+standard runtime also carries the following unmodified font files and charmaps.
+The original font binaries retain their embedded names and attribution fields.
+No brand glyph implies endorsement by its owner.
+
+Font Awesome Free 5.15.4 / 6.7.2
+Copyright (c) Font Awesome (as embedded in the shipped fonts).
+Fonticons, Inc. / Font Awesome: https://fontawesome.com/
+Font files: SIL Open Font License 1.1; non-font charmaps/code: MIT.
+See the two upstream Font-Awesome LICENSE files; 6.7.2 includes full OFL text.
+The separate original SIL OFL template is included verbatim for completeness;
+its placeholder copyright fields are part of the publisher's original template,
+not assertions about this application or replacement font copyright notices.
+
+Elusive Icons 2.0.0
+Elusive Icons by Team Redux: http://reduxframework.com/
+Font: SIL Open Font License 1.1. Charmap/interface code: MIT.
+Upstream license declarations and author attribution:
+https://github.com/dovy/elusive-icons/blob/5ddd9167c8479ec07b78f3ba7150dc4ad32cc7bc/_config.yml
+https://github.com/dovy/elusive-icons/blob/5ddd9167c8479ec07b78f3ba7150dc4ad32cc7bc/src/license.html
+The shipped elusiveicons-webfont-2.0.ttf is byte-identical to the upstream
+fonts/elusiveicons-webfont.ttf blob b6fe85d4b265552431967d873b5c59a3e8e76333.
+See SIL-OFL-1.1-original-template.txt for the complete original OFL terms.
+
+Material Design Icons 5.9.55 / 6.9.96
+Pictogrammers / Templarian: https://pictogrammers.com/library/mdi/
+Fonts: Apache License 2.0. Non-font charmaps/code: MIT.
+See both upstream Material-Design license declarations and Apache-2.0-LICENSE.txt.
+
+Phosphor 1.3.0
+Copyright (c) 2020-2021 Phosphor Icons. MIT License.
+Tobias Fried and Helena Zhang (designers named in the shipped font).
+https://phosphoricons.com/
+The embedded license URL points to the original Phosphor project; its current
+upstream repository is phosphor-icons/web. The MIT copyright notice and full
+license are preserved verbatim from the pinned upstream commit below.
+
+Remix Icon 2.5.0
+Remix Design / Remix Icon: https://github.com/Remix-Design/RemixIcon/tree/v2.5.0
+Apache License 2.0. This notice refers specifically to version 2.5.0, not any
+license adopted by newer versions. See Remix-Icon-2.5.0-LICENSE.txt.
+
+Codicons 0.0.36
+Microsoft and contributors: https://github.com/microsoft/vscode-codicons/tree/0.0.36
+Icons and font: Creative Commons Attribution 4.0 International Public License.
+Unmodified font and original icon identifiers; see Codicons-0.0.36-LICENSE.txt.
+Upstream legal notice: https://github.com/microsoft/vscode-codicons/blob/0.0.36/README.md#legal-notices
+
+License text provenance (bytes downloaded verbatim):
+
+Font-Awesome-5.15.4-LICENSE.txt
+Source: https://raw.githubusercontent.com/FortAwesome/Font-Awesome/5.15.4/LICENSE.txt
+Bytes: 1548
+SHA-256: e779748dfe75e84f974df3c7bc07f842011a100159158b0f1f49b2f2a5a515cb
+
+Font-Awesome-6.7.2-LICENSE.txt
+Source: https://raw.githubusercontent.com/FortAwesome/Font-Awesome/6.7.2/LICENSE.txt
+Bytes: 7427
+SHA-256: 9b914eae88817d63b576eab5aafde7068c7a1abae125d7cdfb034f1da43a9afc
+
+Material-Design-5.9.55-LICENSE.txt
+Source: https://raw.githubusercontent.com/Templarian/MaterialDesign-Webfont/v5.9.55/LICENSE
+Bytes: 992
+SHA-256: 3bae6305bcaa6d10219b999f65c342034c2d40b1c0e8567fa08605e73ccba829
+
+Material-Design-6.9.96-LICENSE.txt
+Source: https://raw.githubusercontent.com/Templarian/MaterialDesign-Webfont/v6.9.96/LICENSE
+Bytes: 992
+SHA-256: 3bae6305bcaa6d10219b999f65c342034c2d40b1c0e8567fa08605e73ccba829
+
+Remix-Icon-2.5.0-LICENSE.txt
+Source: https://raw.githubusercontent.com/Remix-Design/RemixIcon/v2.5.0/License
+Bytes: 11357
+SHA-256: c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4
+
+Phosphor-LICENSE.txt
+Source: https://raw.githubusercontent.com/phosphor-icons/web/3d40a3eaa73b25d20d263f0e1e55c9fed3e66809/LICENSE
+Bytes: 1076
+SHA-256: 687fbe52d0eb5c2353eca27a4037e889145ee0b584d3b1abf67581c4a4a4e47c
+
+Codicons-0.0.36-LICENSE.txt
+Source: https://raw.githubusercontent.com/microsoft/vscode-codicons/0.0.36/LICENSE
+Bytes: 19047
+SHA-256: d6239afa918961b465b07bf7411cbe34ff6685854f58553db7966f4881a0211f
+
+SIL-OFL-1.1-original-template.txt
+Source: https://openfontlicense.org/documents/OFL.txt
+Bytes: 4599
+SHA-256: 1d361a8f8e8ce6e68457dcd93fb56e162e6baa3bbb7e7573a290d44399f6b57e
+
+Apache-2.0-LICENSE.txt
+Source: https://www.apache.org/licenses/LICENSE-2.0.txt
+Bytes: 11358
+SHA-256: cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30
+
+Bundled font binary inventory (from installed QtAwesome 1.4.2):
+codicon-0.0.36.ttf  SHA-256 360527575395ad70f940eff1e43eb7c2ec64f4e69f89dc5861b73420d2a578f0
+elusiveicons-webfont-2.0.ttf  SHA-256 29b93f3fe666bf73dcc857869aee47532f710c0a16959c6275dc5bc2e3be4c9e
+fontawesome5-brands-webfont-5.15.4.ttf  SHA-256 cda59d6efffa685830fd95b55f64ae9cb51279cd34b2410b69f84c7ec30157d9
+fontawesome5-regular-webfont-5.15.4.ttf  SHA-256 fb5143dfe010d47b0fdedd36e4bac1ac8ff2e39b9f20b64891a88a7a219422f5
+fontawesome5-solid-webfont-5.15.4.ttf  SHA-256 4c5431bc1b2abf8aed5c614f2f32120d666bdda640cb1a7678d70e08cdd4323f
+fontawesome6-brands-webfont-6.7.2.ttf  SHA-256 808443ae6c8204395add8543da8a90a60b9376fb0f87ed8e8ea37d109596d805
+fontawesome6-regular-webfont-6.7.2.ttf  SHA-256 cffc8c04d8257c600e0533bdf7cfbf0775b801b50bc39a6f8122ee0c48a1373d
+fontawesome6-solid-webfont-6.7.2.ttf  SHA-256 220d6d592b543eb991b8c11137ef0082c27d6ff6fdaa25e4335945f57a487c6c
+materialdesignicons5-webfont-5.9.55.ttf  SHA-256 f89ca374a7545105f70a6345919083f9011badade1ff17f5e99f97853e7c33da
+materialdesignicons6-webfont-6.9.96.ttf  SHA-256 be825c1294d3c4f046c8e496b18f8f0c7d2864e339c81bdab9297f17ffac1938
+phosphor-1.3.0.ttf  SHA-256 351874de64758f3b7fb405cd078ac0ed5ffb9717fb5b9b10013ac03d4c13680b
+remixicon-2.5.0.ttf  SHA-256 0ac8bc3ccea26ed47e96844ef26675969c669714d723c081101e51799d501520

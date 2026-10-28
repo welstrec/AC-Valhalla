@@ -1,0 +1,14 @@
+* text=auto
+.gitattributes text eol=lf
+.gitignore text eol=lf
+*.py text eol=lf
+*.md text eol=lf
+*.svg text eol=lf
+*.txt text eol=lf
+*.ps1 text eol=crlf
+
+# Preserve the supplied table and generated catalogue byte for byte.
+data/source.CT binary -whitespace
+data/catalog.json -text -whitespace
+third_party/** -text -whitespace
+*.ico binary
