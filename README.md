@@ -1,10 +1,14 @@
-# Valhalla Companion
+# Assassin's Creed Valhalla Trainer gratis para PC | Valhalla Companion
 
-Editor de inventario para **Assassin's Creed Valhalla** con una interfaz de Windows de 64 bits. El ejecutable funciona sin Cheat Engine ni Python instalado.
+**Valhalla Companion** es un **trainer gratuito para Assassin's Creed Valhalla en Windows x64**, con editor de inventario, gestión de recursos y ayudas de juego. Explora 2.327 objetos y 290 packs desde una interfaz organizada por categorías.
+
+**Descarga y uso gratuitos para todos, sin pagos ni suscripciones.** El EXE es portable y funciona sin Cheat Engine ni Python instalado.
+
+**Free AC Valhalla trainer for Windows PC:** portable inventory editor with item packs, resource quantities and gameplay helpers.
 
 **Versión 0.4.0 · validación en partida pendiente.** Las 196 pruebas automatizadas usan datos simulados y procesos de prueba propios. Una firma detectada no garantiza compatibilidad con todas las versiones del juego. El alcance de las comprobaciones está en [docs/VALIDACION.md](docs/VALIDACION.md).
 
-## Uso
+## Descargar el trainer gratis
 
 Descarga y extrae el paquete portable de [la última versión en Releases](https://github.com/welstrec/AC-Valhalla/releases/latest). Conserva los avisos y licencias incluidos.
 
@@ -17,7 +21,7 @@ Descarga y extrae el paquete portable de [la última versión en Releases](https
 
 Solo se aceptan los procesos `ACValhalla.exe` y `ACValhalla_plus.exe`. Si Windows deniega el acceso, abre la aplicación mediante **Ejecutar como administrador**.
 
-## Funciones
+## Funciones del trainer y editor de inventario
 
 - **Catálogo:** 2.327 objetos y 290 packs, organizados en Tienda y eventos, Juego base y Expansiones y extras. Incluye búsqueda, tipos de objeto, favoritos y vista del contenido de cada pack.
 - **Lista e imágenes:** filas compactas con iconos, tarjetas opcionales y una ficha ampliable. Las ilustraciones originales interpretan nombres y categorías; no son imágenes oficiales ni confirman el aspecto real. Puedes importar imágenes locales PNG, JPEG o WebP.
